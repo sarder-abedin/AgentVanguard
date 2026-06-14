@@ -252,3 +252,75 @@ vanguardllm/
 This structure maps directly onto the components above, allowing each to be developed
 and tested independently while integration adapters keep the firewall usable with any
 agent framework.
+
+## 7. Applying VanguardLLM to Any Workflow
+
+The reason the three-boundary model (§3) generalizes is that **almost every agentic
+workflow — regardless of framework — is built from the same underlying primitives**:
+a chat-completions-style message list sent to an LLM, a function/tool-calling
+response format, and a dispatcher that executes those calls and feeds results back as
+messages. VanguardLLM's detectors operate on *those* primitives, not on
+framework-specific abstractions. Onboarding a new workflow is therefore mostly a
+matter of **configuration** (policy + trust-label mapping), not new code.
+
+### 7.1 Integration modes (pick based on how much you can change)
+
+| Mode | How it works | Code changes needed | Best for |
+|------|---------------|----------------------|----------|
+| **Reverse proxy / drop-in API gateway** | Point the agent's LLM client `base_url` at VanguardLLM instead of the provider; VanguardLLM forwards to the real provider after running the Input Guard, and inspects the response for tool calls before returning it. | One line (`base_url`) | Any framework using an OpenAI/Anthropic-compatible client — LangChain, LlamaIndex, raw SDK usage. |
+| **MCP gateway** | VanguardLLM runs as an MCP server that proxies to the real MCP servers (filesystem, browser, DB, etc.), applying the Tool-Call Guard and Sandbox between agent and tool. | Point MCP client config at the VanguardLLM MCP endpoint | Any MCP-based agent — the protocol is already standardized, so one gateway covers all tools. |
+| **SDK / middleware wrapper** | Import the VanguardLLM SDK and wrap the LLM client and tool dispatcher with guard middleware (`guarded_client = vanguard.wrap(client, policy="...")`). | Minor — wrap two objects | Custom agent loops where you control the dispatcher code directly. |
+| **Network sidecar (egress proxy)** | Deploy VanguardLLM as a sidecar container; all outbound HTTP/DB/shell traffic from the agent's sandbox is routed through it. | None — infra-level | Containerized/Kubernetes agent deployments; enforces the Tool-Call Guard's SSRF/egress rules even for traffic the firewall didn't directly mediate. |
+
+These modes are complementary: a typical deployment uses the **reverse proxy** for the
+LLM call (Input/Output Guards) plus either the **MCP gateway** or **network sidecar**
+for the Tool-Call Guard and Sandbox, so no part of the agent's I/O bypasses mediation.
+
+### 7.2 How it maps onto common workflow shapes
+
+- **Single-agent, function-calling loop** (OpenAI/Anthropic tool use, LangChain
+  `AgentExecutor`, etc.): the message array sent on each turn is the Input Guard's
+  unit of work; each `tool_call` in the response is the Tool-Call Guard's unit of
+  work; each `tool_result` message re-enters as `tool_output`-tagged content.
+- **RAG pipelines**: documents returned by the retriever are tagged `retrieved_doc`
+  and pass through the Input Guard *before* being concatenated into the prompt —
+  this is where indirect prompt injection from poisoned documents is caught. Ingestion
+  into the vector store is a separate checkpoint for the Orchestration Guard's
+  memory-integrity checks.
+- **Multi-agent systems** (AutoGen, CrewAI, swarm/handoff patterns): every
+  inter-agent message is tagged `sub_agent:<name>` and policy-checked exactly like a
+  `tool_output` — a message from one agent is still untrusted input to another unless
+  the policy explicitly grants it elevated trust. The Orchestration Guard's
+  budget/loop limits apply to the *whole graph*, not per-agent, so one runaway agent
+  can't exhaust shared resources.
+- **Browser-use / computer-use agents**: the Tool-Call Guard validates
+  navigate/click/type actions against domain and action allow-lists; the Sandbox is
+  the isolated browser container with its network egress pinned to the same proxy; the
+  Output Guard scans page content/screenshots returned to the model for secrets before
+  they become part of context.
+- **Code-execution / coding agents**: the Sandbox is the code-execution container; the
+  Tool-Call Guard validates file paths (no traversal outside the workspace) and shell
+  arguments (no unchecked string-built commands); the Output Guard scans
+  stdout/generated files for credentials before they're surfaced.
+
+### 7.3 Onboarding checklist for a new workflow
+
+1. **Write the policy file** — enumerate the workflow's tools, each one's allowed
+   parameter ranges/domains/paths, and which combinations require human approval.
+   Start from a default-deny template and add only what the workflow needs.
+2. **Map trust labels** — declare which message roles/fields correspond to `user`,
+   `tool_output`, `retrieved_doc`, `sub_agent`, etc., so the Input Guard can tag
+   content correctly for this workflow's message format.
+3. **Pick integration mode(s)** from §7.1 based on how much of the stack you control.
+4. **Set session budgets** — token/cost/iteration limits sized to the workflow's
+   normal operating range (e.g., a single-shot Q&A agent needs a much smaller loop
+   budget than a long-running coding agent).
+5. **Wire audit/alerting** into existing observability (the audit log format is
+   workflow-independent — it's keyed on session ID, provenance, and policy decision).
+6. **Red-team before production** — run an adversarial test suite (known prompt-
+   injection payloads, SSRF probes, exfiltration patterns) against the new policy to
+   confirm fail-closed behavior, then iterate on the allow-lists.
+
+Because steps 1, 2, and 4 are the only workflow-specific work, and the detectors,
+guards, and sandbox implementations are shared, adding a new workflow is closer to
+"write a config file" than "integrate a new security product."
