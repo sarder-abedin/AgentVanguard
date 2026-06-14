@@ -67,14 +67,14 @@ and "actions":
 | **PII** | Personally Identifiable Information | Data that identifies a person — names, emails, social security numbers, etc. |
 | **SSN** | Social Security Number | A US government ID number; one of the things Agent Firewall can detect and redact. |
 
-| Concept | What it means |
-|---|---|
-| **Ingress / input check** | Before your agent "sees" a message (from a user, a webpage, a tool result, another agent), Agent Firewall scans it for prompt-injection attacks ("ignore previous instructions...") and sensitive data. |
-| **Tool call / action check** | Before your agent's tool (e.g., `send_email`, `delete_account`, `run_sql`) actually runs, Agent Firewall checks: is this tool allowed? Is this agent allowed to call it? Do the arguments look dangerous (URLs pointing at internal servers, file paths escaping a sandbox, secrets being passed around)? |
-| **Output check** | Before text goes back to a user (or gets written to a log, file, or another system), Agent Firewall scans for things like SSNs, credit card numbers, API keys, and can automatically redact them. |
-| **Session / runtime limits** | Agent Firewall can track how many steps/tool calls/time/money a session has used, and stop a runaway or looping agent. |
-| **Decision** | Every check returns one of four verdicts: `ALLOW`, `ALLOW_WITH_MODIFICATIONS` (e.g., redacted), `REQUIRE_USER_CONFIRMATION`, or `DENY`. |
-| **Fail-closed** | If Agent Firewall doesn't recognize a tool, or a workflow isn't configured, it denies/restricts by default rather than silently allowing it. |
+| Concept | What it means | How it works |
+|---|---|---|
+| **Ingress / input check** | Before your agent "sees" a message (from a user, a webpage, a tool result, another agent), Agent Firewall scans it for prompt-injection attacks ("ignore previous instructions...") and sensitive data. | The **input guard** tags the message with a provenance label (user, retrieved document, tool output, etc.) and runs the prompt-injection, PII, and secrets detectors over it — the same checks regardless of which framework sent the message. |
+| **Tool call / action check** | Before your agent's tool (e.g., `send_email`, `delete_account`, `run_sql`) actually runs, Agent Firewall checks: is this tool allowed? Is this agent allowed to call it? Do the arguments look dangerous (URLs pointing at internal servers, file paths escaping a sandbox, secrets being passed around)? | The **tool guard** looks up the tool's `ToolManifest`, validates the arguments against its schema, scans them for SSRF/path-traversal/shell-injection/secrets, and checks the calling agent against `allowed_callers`, `risk_tier`, and `requires_approval`. |
+| **Output check** | Before text goes back to a user (or gets written to a log, file, or another system), Agent Firewall scans for things like SSNs, credit card numbers, API keys, and can automatically redact them. | The **output guard** runs the same PII/secrets detectors used on input over the outgoing text and, if `dlp:` redaction is enabled, replaces matches with `[REDACTED]` before the text leaves the system. |
+| **Session / runtime limits** | Agent Firewall can track how many steps/tool calls/time/money a session has used, and stop a runaway or looping agent. | The **session guard** keeps a running `SessionState` per session ID (step count, tool-call count, elapsed time, cost, recent call hashes) and compares it against `runtime_limits:` in your config on every check. |
+| **Decision** | Every check returns one of four verdicts: `ALLOW`, `ALLOW_WITH_MODIFICATIONS` (e.g., redacted), `REQUIRE_USER_CONFIRMATION`, or `DENY`. | Every guard that ran produces a `Verdict`; the **engine** combines them into one `Decision` using "worst wins" — `DENY` beats `REQUIRE_USER_CONFIRMATION` beats `ALLOW_WITH_MODIFICATIONS` beats `ALLOW`. |
+| **Fail-closed** | If Agent Firewall doesn't recognize a tool, or a workflow isn't configured, it denies/restricts by default rather than silently allowing it. | An unregistered tool gets an `UNKNOWN_TOOL` finding and an automatic `DENY`; an unrecognized workflow runs in `default_workflow_mode: restrictive`, where only `risk_tier: low` tools are auto-allowed. |
 
 ### The four decisions, explained
 
