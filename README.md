@@ -160,11 +160,82 @@ streaming responses — use the sidecar's `/v1/check-output` for those.
 - `audit.http_batch` ships audit events to a central collector via
   `HttpBatchAuditSink`, alongside the local JSONL audit log.
 
-### Docker / Kubernetes
+### Docker
 
-```bash
-docker compose up --build   # builds the image and runs `agent-firewall serve` on :8080
-```
+Run Agent Firewall as a standalone container — useful for polyglot stacks,
+infra-level egress mediation, or trying it out without a Python environment.
+The [`Dockerfile`](Dockerfile) builds on `python:3.12-slim`, installs the
+`server` extra, runs as a non-root user, and ships a working default config
+out of the box.
+
+1. **(Optional) Provide your own config.** The container reads
+   `/app/agent_firewall.yaml` by default (overridable via
+   `AGENT_FIREWALL_CONFIG`). To customize tools/workflows/policy, create a
+   config on the host first:
+
+   ```bash
+   cp examples/agent_firewall.yaml ./agent_firewall.yaml
+   # or, with the package installed locally:
+   agent-firewall init -o agent_firewall.yaml
+   ```
+
+2. **Build and run with Docker Compose** (recommended — wires up the config
+   and audit-log volumes for you):
+
+   ```bash
+   docker compose up --build
+   ```
+
+   This builds the image, mounts `./agent_firewall.yaml` read-only at
+   `/app/agent_firewall.yaml`, mounts `./logs` for the audit log, and exposes
+   the sidecar on `:8080`. Requires `./agent_firewall.yaml` to exist (step 1)
+   — otherwise Docker creates an empty directory at that path and the
+   container fails to start.
+
+3. **Or build and run with plain `docker`**:
+
+   ```bash
+   docker build -t agent-firewall:latest .
+   docker run --rm -p 8080:8080 \
+     -v "$(pwd)/agent_firewall.yaml:/app/agent_firewall.yaml:ro" \
+     -v "$(pwd)/logs:/app/logs" \
+     agent-firewall:latest
+   ```
+
+   Omit the volume mounts to run with the image's built-in default config.
+
+4. **Verify it's running**:
+
+   ```bash
+   curl http://localhost:8080/healthz   # {"status": "ok"}
+   curl http://localhost:8080/readyz    # {"status": "ready"}
+   curl http://localhost:8080/metrics   # Prometheus metrics
+   ```
+
+5. **Check the audit log** (written to the mounted `./logs/` directory):
+
+   ```bash
+   tail -f logs/agent_firewall_audit.jsonl
+   ```
+
+6. **Stop the container**: `Ctrl-C`, or `docker compose down` if started in
+   the background with `-d`.
+
+### Kubernetes
 
 See [`deploy/kubernetes/`](deploy/kubernetes/) for `Deployment`/`Service`/`ConfigMap`
-manifests (non-root, read-only root filesystem, `/healthz`/`/readyz` probes).
+manifests (2 replicas, non-root, read-only root filesystem,
+`/healthz`/`/readyz` probes, resource requests/limits). Quick start:
+
+```bash
+docker build -t <registry>/agent-firewall:<tag> .
+docker push <registry>/agent-firewall:<tag>
+# set spec.template.spec.containers[0].image in deploy/kubernetes/deployment.yaml
+# to <registry>/agent-firewall:<tag>, then:
+kubectl apply -f deploy/kubernetes/configmap.yaml
+kubectl apply -f deploy/kubernetes/deployment.yaml
+kubectl apply -f deploy/kubernetes/service.yaml
+```
+
+See [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) for updating
+policy and calling the service from inside the cluster.
