@@ -1,8 +1,14 @@
-# VanguardLLM Firewall Architecture
+# Agent Firewall Architecture
+
+> This is the design document for the **Agent Firewall** project (repository:
+> VanguardLLM), implemented as the Python package `agent_firewall` (PyPI/CLI name
+> `agent-firewall`). See [`src/agent_firewall/`](../src/agent_firewall/) for the
+> implementation and §6/§7 below for how the design maps onto the package layout and
+> integration modes.
 
 ## 1. Purpose
 
-VanguardLLM is a **workflow-agnostic firewall for LLM-based agentic systems**. It sits
+Agent Firewall is a **workflow-agnostic firewall for LLM-based agentic systems**. It sits
 between the components of any agent (user, model, tools/APIs, memory/RAG stores, and
 other agents) and enforces security controls regardless of the orchestration framework
 in use (LangChain, AutoGen, MCP-based agents, custom loops, etc.).
@@ -234,47 +240,66 @@ actions that can't be safely automated regardless of how good the automated chec
    prompt-injection detection can miss novel attacks, so the policy engine, tool-call
    guard, sandbox, and output guard each independently constrain the blast radius.
 
-## 6. Suggested Project Layout (for future implementation)
+## 6. Project Layout
 
 ```
-vanguardllm/
-├── gateway/          # Input guard: provenance tagging, injection/PII detection
-├── policy/           # Policy engine: schema, evaluator, example policies (YAML/Rego)
-├── toolguard/         # Tool-call validation, SSRF/path-traversal/egress checks
-├── sandbox/           # Execution isolation adapters (container/microVM runners)
-├── outputguard/       # DLP, exfiltration detection, context-aware sanitization
-├── session/           # Budget tracking, loop detection, memory-integrity checks
-├── identity/          # Credential broker, delegation-chain tracking
-├── audit/             # Structured logging, replay, alerting
-└── integrations/      # Adapters for LangChain / MCP / custom agent loops
+src/agent_firewall/
+├── core/             # enums, pydantic models (PolicyInput, Verdict, Decision, ...), errors
+├── config/           # YAML schema, loader, built-in defaults (agent_firewall.yaml)
+├── detectors/        # injection, PII, secrets, exfiltration — heuristic/regex detectors
+├── policy/           # match-dict evaluator, risk scoring, Verdict aggregation
+├── guards/           # input_guard, tool_guard, output_guard, session_guard
+├── approval/         # ApprovalProvider protocol: auto_deny (default), cli_prompt
+├── audit/            # AuditLogger + AuditEvent + sinks (jsonl_file)
+├── session/          # SessionStore protocol + in-memory implementation
+├── tools/            # ToolManifest re-exports for tool registration
+├── engine.py         # Engine — the single shared policy core (authorize())
+├── firewall.py       # AgentFirewall public API (wrap_tool, @firewall.tool, wrap_agent)
+└── cli/              # `agent-firewall` typer CLI (init, validate-config, scan, ...)
 ```
 
-This structure maps directly onto the components above, allowing each to be developed
-and tested independently while integration adapters keep the firewall usable with any
-agent framework.
+This maps directly onto the components in §4: the **Input / Prompt Gateway** is
+`guards/input_guard.py`, the **Policy & Authorization Engine** is `policy/` plus
+`engine.py`, the **Tool-Call / Action Guard** is `guards/tool_guard.py`, the
+**Output / Response Guard** is `guards/output_guard.py`, and the **Orchestration /
+Session Guard** is `guards/session_guard.py`. Every guard returns a `Verdict`;
+`policy/risk.py` aggregates `Verdict`s from all guards into a single `Decision` via
+worst-action-wins. `engine.py` is the **only** place this aggregation happens — every
+integration surface (SDK, tool-broker, sidecar, ASGI middleware) constructs a
+`PolicyInput` and calls `Engine.authorize()`, so policy logic is never duplicated.
 
-## 7. Applying VanguardLLM to Any Workflow
+The Execution Sandbox (§4.4), Identity/Credential Broker (§4.7), and the
+Redis-backed `SessionStore`/hybrid control plane (§4.2, §4.8) are infrastructure-level
+concerns layered around the firewall by the deployment (Phase 2/3 sidecar, Kubernetes
+manifests) rather than logic inside the core engine.
+
+## 7. Applying Agent Firewall to Any Workflow
 
 The reason the three-boundary model (§3) generalizes is that **almost every agentic
 workflow — regardless of framework — is built from the same underlying primitives**:
 a chat-completions-style message list sent to an LLM, a function/tool-calling
 response format, and a dispatcher that executes those calls and feeds results back as
-messages. VanguardLLM's detectors operate on *those* primitives, not on
+messages. Agent Firewall's detectors operate on *those* primitives, not on
 framework-specific abstractions. Onboarding a new workflow is therefore mostly a
 matter of **configuration** (policy + trust-label mapping), not new code.
 
 ### 7.1 Integration modes (pick based on how much you can change)
 
-| Mode | How it works | Code changes needed | Best for |
-|------|---------------|----------------------|----------|
-| **Reverse proxy / drop-in API gateway** | Point the agent's LLM client `base_url` at VanguardLLM instead of the provider; VanguardLLM forwards to the real provider after running the Input Guard, and inspects the response for tool calls before returning it. | One line (`base_url`) | Any framework using an OpenAI/Anthropic-compatible client — LangChain, LlamaIndex, raw SDK usage. |
-| **MCP gateway** | VanguardLLM runs as an MCP server that proxies to the real MCP servers (filesystem, browser, DB, etc.), applying the Tool-Call Guard and Sandbox between agent and tool. | Point MCP client config at the VanguardLLM MCP endpoint | Any MCP-based agent — the protocol is already standardized, so one gateway covers all tools. |
-| **SDK / middleware wrapper** | Import the VanguardLLM SDK and wrap the LLM client and tool dispatcher with guard middleware (`guarded_client = vanguard.wrap(client, policy="...")`). | Minor — wrap two objects | Custom agent loops where you control the dispatcher code directly. |
-| **Network sidecar (egress proxy)** | Deploy VanguardLLM as a sidecar container; all outbound HTTP/DB/shell traffic from the agent's sandbox is routed through it. | None — infra-level | Containerized/Kubernetes agent deployments; enforces the Tool-Call Guard's SSRF/egress rules even for traffic the firewall didn't directly mediate. |
+| Mode | How it works | Code changes needed | Best for | Phase |
+|------|---------------|----------------------|----------|-------|
+| **SDK** | `firewall = AgentFirewall.from_config(...)`; call `firewall.authorize(...)` for ingress/model-request/output checks, and `firewall.check_output(...)` before returning text to a user or downstream system. | Add calls at the ingress/egress points of your loop | Custom agent loops where you control the message-handling code directly. | 1 |
+| **Tool broker** | Register each tool's `ToolManifest` and wrap its implementation with `firewall.wrap_tool(...)` / `@firewall.tool(manifest=...)`; the Tool-Call Guard (schema, SSRF, path-traversal, egress, credential-exfil, approval routing) and Output Guard (DLP on tool results) run automatically on every call. | Wrap each tool function | Any framework where you control the tool dispatcher — LangChain tools, MCP tool implementations, custom function-calling loops. | 1 |
+| **ASGI middleware** | `AgentFirewallMiddleware` wraps a FastAPI/Starlette (or other ASGI) app, running `check-ingress` on requests and `check-output` on responses, attaching `trace_id`/`Decision` to `request.state`. | Add one middleware line | Agent backends already exposed as an ASGI HTTP service. | 3 |
+| **Sidecar / API service** | Run `agent-firewall serve` as a sidecar container exposing `/v1/authorize`, `/v1/check-ingress`, `/v1/authorize-tool-call`, `/v1/check-output`, etc.; any process (any language) calls these endpoints, or routes egress traffic through it. | None — infra-level; call over HTTP | Containerized/Kubernetes deployments, polyglot agent stacks, or workflows where you can't import a Python package directly. | 2 |
 
-These modes are complementary: a typical deployment uses the **reverse proxy** for the
-LLM call (Input/Output Guards) plus either the **MCP gateway** or **network sidecar**
-for the Tool-Call Guard and Sandbox, so no part of the agent's I/O bypasses mediation.
+All four modes are thin adapters around the **same** `Engine.authorize()` — the SDK and
+tool-broker call it in-process (Phase 1), the sidecar exposes it over HTTP (Phase 2),
+and the ASGI middleware calls it at the request/response boundary of an existing
+service (Phase 3). They are complementary: a typical deployment uses the **SDK** for
+ingress/output checks plus the **tool broker** for every tool call, optionally fronted
+by the **ASGI middleware** (for an HTTP-exposed agent) or the **sidecar** (for
+infra-level egress mediation and polyglot stacks), so no part of the agent's I/O
+bypasses mediation.
 
 ### 7.2 How it maps onto common workflow shapes
 
