@@ -48,6 +48,25 @@ and "actions":
 
 ## 2. Key ideas in plain language
 
+### Abbreviations you'll see in this guide
+
+| Abbreviation | Stands for | What it means here |
+|---|---|---|
+| **AI** | Artificial Intelligence | The broad field — an "AI agent" is software built around a language model that can act on your behalf. |
+| **LLM** | Large Language Model | The underlying model (e.g., GPT, Claude) that your agent sends messages to and gets replies from. |
+| **API** | Application Programming Interface | A way for programs to talk to each other. An "API key" is a secret credential used to call one. |
+| **SDK** | Software Development Kit | The `agent_firewall` Python library you `import` directly into your code. |
+| **CLI** | Command-Line Interface | The `agent-firewall` command you type into a terminal. |
+| **HTTP** | HyperText Transfer Protocol | The protocol used for web and API requests — what `curl` and your browser send. |
+| **REST** | Representational State Transfer | A common style for HTTP-based APIs; the sidecar's endpoints follow it. |
+| **ASGI** | Asynchronous Server Gateway Interface | The standard interface Python web frameworks like FastAPI use. |
+| **JSON** | JavaScript Object Notation | The text format used for config, API requests/responses, and the audit log. |
+| **RAG** | Retrieval-Augmented Generation | A pattern where an agent retrieves documents and adds them to the LLM's context before answering. |
+| **MCP** | Model Context Protocol | A standard way for tools and data sources to be exposed to LLM-based agents. |
+| **SSRF** | Server-Side Request Forgery | An attack where a tool argument tricks a server into making requests to internal or cloud-metadata addresses. |
+| **PII** | Personally Identifiable Information | Data that identifies a person — names, emails, social security numbers, etc. |
+| **SSN** | Social Security Number | A US government ID number; one of the things Agent Firewall can detect and redact. |
+
 | Concept | What it means |
 |---|---|
 | **Ingress / input check** | Before your agent "sees" a message (from a user, a webpage, a tool result, another agent), Agent Firewall scans it for prompt-injection attacks ("ignore previous instructions...") and sensitive data. |
