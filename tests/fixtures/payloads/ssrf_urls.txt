@@ -27,3 +27,8 @@ http://0.0.0.0/
 # Blocked metadata hostnames
 http://metadata.google.internal/computeMetadata/v1/
 http://metadata.internal/latest/meta-data/
+
+# IPv6 loopback / private / link-local, as bare host literals
+::1
+fd00::1
+fe80::1

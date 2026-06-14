@@ -244,6 +244,11 @@ def _extract_host(value: str) -> str | None:
         return urlparse(value).hostname
     if " " in value or "\t" in value or "\n" in value or "@" in value:
         return None
+    try:
+        ipaddress.ip_address(value)
+        return value
+    except ValueError:
+        pass
     if "." not in value and value.lower() != "localhost":
         return None
     return value.split("/")[0].split(":")[0] or None

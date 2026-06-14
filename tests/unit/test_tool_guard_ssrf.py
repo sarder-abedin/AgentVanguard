@@ -42,6 +42,22 @@ def test_check_ssrf_allows_public_host() -> None:
     assert findings == []
 
 
+def test_extract_host_handles_bare_ipv6_literals() -> None:
+    """A bare IPv6 literal has no dots, so the dot-based bare-hostname check
+    in `_extract_host` must not swallow it before `_check_ssrf` can inspect
+    it via `ipaddress.ip_address`."""
+
+    assert tool_guard._extract_host("::1") == "::1"
+    assert tool_guard._extract_host("fd00::1") == "fd00::1"
+
+
+def test_check_ssrf_blocks_bare_ipv6_loopback_host() -> None:
+    findings = tool_guard._check_ssrf("host", "::1", FETCH_URL_MANIFEST)
+
+    assert findings, "expected SSRF finding for a bare IPv6 loopback host"
+    assert all(f.type == FindingType.SSRF for f in findings)
+
+
 def test_check_ssrf_ignores_non_host_arguments() -> None:
     findings = tool_guard._check_ssrf("comment", "10.0.0.5 is a private IP example", FETCH_URL_MANIFEST)
 

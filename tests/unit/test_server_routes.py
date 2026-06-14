@@ -8,6 +8,7 @@ request/response wiring (status codes, field names), not policy logic.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -164,6 +165,20 @@ def test_check_memory_write_redacts_pii(client: TestClient) -> None:
     body = response.json()
     assert body["decision"] == "ALLOW_WITH_MODIFICATIONS"
     assert "123-45-6789" not in body["redacted_content"]
+
+
+def test_check_memory_write_preserves_source_id_in_audit(client: TestClient, tmp_path: Path) -> None:
+    response = client.post(
+        "/v1/check-memory-write",
+        json={"content": "the customer's order is on its way", "source_id": "doc-42"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "ALLOW"
+
+    audit_lines = (tmp_path / "logs" / "audit.jsonl").read_text().splitlines()
+    last_event = json.loads(audit_lines[-1])
+    assert last_event["payload"]["content"][0]["source_id"] == "doc-42"
 
 
 def test_validate_plan_overall_is_worst_step(tmp_path: Path) -> None:
