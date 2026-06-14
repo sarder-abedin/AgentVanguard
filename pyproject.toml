@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-firewall"
+version = "0.1.0"
+description = "A workflow-agnostic firewall for LLM-based agentic systems"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "jsonschema>=4.21",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+fastapi = ["fastapi", "starlette"]
+server = ["fastapi", "uvicorn[standard]", "starlette", "httpx"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-pyyaml", "types-jsonschema"]
+otel = ["opentelemetry-api", "opentelemetry-sdk"]
+
+[project.scripts]
+agent-firewall = "agent_firewall.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_firewall"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
