@@ -1,2 +1,2 @@
 # VanguardLLM
-LLM Firewall
+Firewall for agentic workflow.
