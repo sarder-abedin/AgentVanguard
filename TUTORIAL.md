@@ -556,8 +556,10 @@ Useful endpoints:
 | `GET /healthz` / `GET /readyz` | Health checks for load balancers/Kubernetes |
 | `GET /metrics` | Prometheus metrics |
 
-There's also Docker/Kubernetes support — see [`deploy/kubernetes/`](deploy/kubernetes/)
-and `docker compose up --build`.
+There's also Docker/Kubernetes support — see
+[README.md § Docker](README.md#docker) for a step-by-step walkthrough
+(`docker compose up --build`) and [`deploy/kubernetes/`](deploy/kubernetes/)
+for cluster manifests.
 
 ### Already have a FastAPI/Starlette app?
 
