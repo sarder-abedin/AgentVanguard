@@ -13,9 +13,51 @@ plain-language walkthrough of what it does and how to use it.
 
 ## Installation
 
-```bash
-pip install -e .
-```
+1. **Clone the repository** (skip if you already have it locally):
+
+   ```bash
+   git clone https://github.com/sarder-abedin/VanguardLLM.git
+   cd VanguardLLM
+   ```
+
+2. **Create and activate a virtual environment** (recommended):
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate   # on Windows: .venv\Scripts\activate
+   ```
+
+3. **Install the package**:
+
+   ```bash
+   pip install -e .
+   ```
+
+   This installs the core engine, SDK, tool broker, and CLI with only
+   lightweight dependencies (`pydantic`, `pyyaml`, `jsonschema`, `typer`,
+   `rich`) — no FastAPI/uvicorn required.
+
+4. **(Optional) Install extras**, depending on what you need:
+
+   ```bash
+   pip install -e ".[server]"          # HTTP sidecar (agent-firewall serve)
+   pip install -e ".[server,metrics]"  # + Prometheus /metrics endpoint
+   pip install -e ".[server,otel]"     # + OpenTelemetry tracing
+   pip install -e ".[redis]"           # shared session store across replicas
+   pip install -e ".[dev]"             # pytest, ruff, mypy for development
+   ```
+
+   Extras can be combined, e.g. `pip install -e ".[server,metrics,otel,redis,dev]"`.
+
+5. **Verify the installation**:
+
+   ```bash
+   agent-firewall version
+   agent-firewall doctor
+   ```
+
+   `doctor` reports your Python version, config validity, audit-log
+   writability, and which optional extras are installed.
 
 ## Quick start
 
