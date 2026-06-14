@@ -66,12 +66,95 @@ and "actions":
 - **`REQUIRE_USER_CONFIRMATION`** — This action is risky enough that a human
   should approve it first (e.g., "send this email", "delete this record").
   By default, Agent Firewall has no human in the loop, so this resolves to a
-  block — see [§7 Approvals](#7-approvals-requiring-a-human-in-the-loop).
+  block — see [§8 Approvals](#8-approvals-requiring-a-human-in-the-loop).
 - **`DENY`** — Blocked. Do not proceed.
 
 ---
 
-## 3. Installation
+## 3. How Agent Firewall fits into your workflow
+
+A common question: *"I don't use [your framework] — will this even work for
+my agent?"*
+
+Short answer: **yes**. Agent Firewall doesn't hook into a specific
+framework's internals. It hooks into the things almost every agentic system
+has, no matter how it's built:
+
+- a list of messages sent to an LLM (the "context")
+- the tool/function calls the LLM asks to run
+- the results that come back and get fed into the next turn
+
+Agent Firewall inspects *those* — so it works the same whether your agent is
+a hand-rolled loop, LangChain, AutoGen, CrewAI, an MCP server, or something
+else entirely. Onboarding a new workflow is mostly **configuration**
+(describe your tools and trust labels), not new integration code.
+
+### 3.1 Four ways to plug it in
+
+| Mode | What you do | Best for |
+|---|---|---|
+| **SDK** (§6) | Call `firewall.authorize(...)` / `firewall.check_output(...)` at the points where messages enter/leave your loop. | Custom agent loops where you control the message-handling code. |
+| **Tool broker** (§7) | Wrap each tool function with `@firewall.tool(manifest=...)` / `wrap_tool(...)`. Every call is automatically checked (SSRF, path traversal, secrets, approvals, etc.). | Any agent that can take actions — almost always used alongside the SDK. |
+| **ASGI middleware** (§10) | Add `app.add_middleware(AgentFirewallMiddleware, firewall=firewall)` to an existing FastAPI/Starlette app. | Your agent backend is already an HTTP service and you want all traffic checked with one line. |
+| **Sidecar / HTTP service** (§10) | Run `agent-firewall serve` as its own process/container; call its REST API from any language. | Your agent isn't written in Python, or you want one shared firewall for many services. |
+
+These aren't either/or — a typical deployment uses the **SDK** for
+ingress/output checks, the **tool broker** for every tool call, and
+*optionally* the **ASGI middleware** or **sidecar** at the edge of an
+HTTP-exposed service, so nothing the agent reads or does skips a check.
+
+### 3.2 Mapping it onto common agent shapes
+
+- **Single-agent / function-calling loop** (OpenAI- or Anthropic-style tool
+  use, LangChain `AgentExecutor`, etc.): run `check-ingress` /
+  `check-model-request` on the message list each turn, and wrap every tool
+  with the tool broker. Each tool result re-enters as `tool_output`-tagged
+  content.
+- **RAG pipelines**: tag documents returned by your retriever as
+  `retrieved_doc` and run them through `/v1/compile-context` (or
+  `action=ingress`) *before* they're added to the prompt — this is exactly
+  how a poisoned document trying to hijack the agent gets caught. Writing to
+  / reading from the vector store goes through `/v1/check-memory-write` /
+  `/v1/check-memory-read`.
+- **Multi-agent systems** (AutoGen, CrewAI, swarms/handoffs): treat every
+  message from another agent as untrusted input (`provenance: sub_agent`) —
+  the same treatment as a tool result. Session/runtime limits apply to the
+  whole multi-agent run, so one runaway agent can't burn the shared budget.
+- **Browser-use / computer-use agents**: wrap `navigate`/`click`/`type`
+  actions with the tool broker — SSRF and domain allow-list checks apply to
+  navigation targets automatically. Scan page content with `check_output`
+  before it goes back into the model's context (catches secrets/PII on the
+  page).
+- **Code-execution / coding agents**: wrap the code-exec tool — path-traversal
+  and shell-metacharacter checks apply to file paths and command arguments
+  automatically. Scan stdout/generated files with `check_output` before
+  showing them to the model or the user.
+
+### 3.3 Adding a new workflow: a short checklist
+
+1. **List your tools** in `agent_firewall.yaml` (or as `ToolManifest`s) — what
+   each one does, how risky it is, and who's allowed to call it (§9).
+2. **Map your message roles to provenance labels** (`provenance_mapping` in
+   config) so the input guard knows what's "from the user" vs. "from a
+   tool/document/other agent".
+3. **Pick integration mode(s)** from §3.1 based on how much of the code you
+   control.
+4. **Set runtime limits** (`runtime_limits:`) sized for this workflow — a
+   quick Q&A bot needs a much smaller budget than a long-running coding agent.
+5. **Point your logging at the audit log** (§11) — it's workflow-independent,
+   keyed by session ID and decision.
+6. **Run `agent-firewall scan` / `check-ingress` against known attack
+   payloads** before going live, to confirm the defaults behave the way you
+   expect.
+
+Everything below walks through each of these pieces step by step.
+
+---
+
+## 4. Installation
+
+See [README.md](README.md#installation) for the full step-by-step setup
+(virtual environment, optional extras). The short version:
 
 ```bash
 pip install -e .
@@ -86,7 +169,7 @@ pip install -e ".[server]"
 
 ---
 
-## 4. Your first 5 minutes: the CLI
+## 5. Your first 5 minutes: the CLI
 
 The `agent-firewall` command-line tool lets you try things out without
 writing any Python.
@@ -99,7 +182,7 @@ agent-firewall init
 
 This writes an annotated `agent_firewall.yaml` to your current directory with
 sensible, secure defaults (you'll edit this later to describe your own
-agent's tools — see [§8](#8-configuring-your-own-project)).
+agent's tools — see [§9](#9-configuring-your-own-project)).
 
 ### Step 2 — Check that the config is valid
 
@@ -184,7 +267,7 @@ log directory is writable, and which optional features (`server`, `otel`,
 
 ---
 
-## 5. Using it in your Python code (the SDK)
+## 6. Using it in your Python code (the SDK)
 
 This is the most common way to use Agent Firewall: import it directly into
 your agent's code.
@@ -206,7 +289,7 @@ if decision.decision == "DENY":
     raise SystemExit("blocked: " + "; ".join(decision.reasons))
 
 if decision.decision == "REQUIRE_USER_CONFIRMATION":
-    # Ask a human, or treat as blocked — see §7.
+    # Ask a human, or treat as blocked — see §8.
     ...
 
 # otherwise: safe to pass `user_message` (or `decision.redacted_content`
@@ -242,7 +325,7 @@ output *after*. **Important**: this does **not** check tool calls made
 
 ---
 
-## 6. Protecting tool calls (the "tool broker")
+## 7. Protecting tool calls (the "tool broker")
 
 This is the most important part for agents that can *take actions* (send
 emails, query databases, run code, browse the web, etc.).
@@ -321,7 +404,7 @@ python examples/mock_agent_loop.py   # shows runaway-loop protection too
 
 ---
 
-## 7. Approvals (requiring a human in the loop)
+## 8. Approvals (requiring a human in the loop)
 
 By default, anything that resolves to `REQUIRE_USER_CONFIRMATION` is treated
 as blocked (`approval_provider: auto_deny` — "fail closed, no human
@@ -337,7 +420,7 @@ With `cli_prompt`, a risky action pauses and asks you (in the terminal)
 
 ---
 
-## 8. Configuring your own project
+## 9. Configuring your own project
 
 `agent_firewall.yaml` (created by `agent-firewall init`) is where you describe
 *your* agent's world. The most important sections:
@@ -432,7 +515,7 @@ broken references (e.g., a workflow referencing a tool that doesn't exist).
 
 ---
 
-## 9. Running it as a standalone service (sidecar)
+## 10. Running it as a standalone service (sidecar)
 
 If your agent isn't written in Python, or you want a shared/centralized
 firewall, run Agent Firewall as an HTTP service:
@@ -488,7 +571,7 @@ app.add_middleware(AgentFirewallMiddleware, firewall=firewall)
 
 ---
 
-## 10. Checking what happened (audit log)
+## 11. Checking what happened (audit log)
 
 Every decision Agent Firewall makes is written to a JSON-lines audit log
 (default `./logs/agent_firewall_audit.jsonl`). Each line is one event:
@@ -501,7 +584,7 @@ tail -f logs/agent_firewall_audit.jsonl
 
 ---
 
-## 11. Common scenarios at a glance
+## 12. Common scenarios at a glance
 
 | You want to... | Use |
 |---|---|
@@ -517,7 +600,7 @@ tail -f logs/agent_firewall_audit.jsonl
 
 ---
 
-## 12. Where to go next
+## 13. Where to go next
 
 - [`README.md`](README.md) — concise command/API reference.
 - [`docs/architecture.md`](docs/architecture.md) — full design: threat model,
