@@ -127,8 +127,9 @@ def check_memory_write(req: MemoryWriteRequest, firewall: AgentFirewall = Depend
     about to be persisted to a memory/vector store."""
 
     data = req.model_dump(exclude={"content", "source_id"})
+    content = [ContentItem(text=req.content, provenance=ProvenanceLabel.ASSISTANT, source_id=req.source_id)]
     return firewall.authorize(
-        PolicyInput(action=ActionKind.OUTPUT, content=req.content, arguments={"destination": "plain"}, **data)
+        PolicyInput(action=ActionKind.OUTPUT, content=content, arguments={"destination": "plain"}, **data)
     )
 
 
