@@ -20,6 +20,7 @@ from agent_firewall.core.errors import ConfigError
 from agent_firewall.core.models import PolicyInput
 from agent_firewall.detectors.registry import DetectorRegistry
 from agent_firewall.firewall import AgentFirewall
+from agent_firewall.observability.logging import configure_logging
 from agent_firewall.version import __version__
 
 app = typer.Typer(
@@ -133,7 +134,12 @@ def doctor(
         except OSError as exc:
             console.print(f"[red]Audit path not writable ({audit_dir}): {exc}[/red]")
 
-    for extra_name, module_name in (("server", "fastapi"), ("otel", "opentelemetry")):
+    for extra_name, module_name in (
+        ("server", "fastapi"),
+        ("otel", "opentelemetry"),
+        ("metrics", "prometheus_client"),
+        ("redis", "redis"),
+    ):
         installed = importlib.util.find_spec(module_name) is not None
         color = "green" if installed else "yellow"
         status = "installed" if installed else "not installed"
@@ -165,7 +171,8 @@ def serve(
         console.print(f"[red]Invalid config:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    uvicorn.run(create_app(cfg), host=host, port=port)
+    configure_logging(cfg.firewall.log_level)
+    uvicorn.run(create_app(cfg), host=host, port=port, log_config=None)
 
 
 @app.command()

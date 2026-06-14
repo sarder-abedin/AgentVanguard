@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from agent_firewall.core.models import ContentItem, Decision, PolicyInput
+from agent_firewall.server.schemas import PlanStep, ValidatePlanResponse
 
 
 class AgentFirewallClient:
@@ -68,6 +69,39 @@ class AgentFirewallClient:
         **kwargs: Any,
     ) -> Decision:
         return self._post("/v1/check-output", _payload(content=content, destination=destination, **kwargs))
+
+    def compile_context(
+        self,
+        items: list[ContentItem],
+        **kwargs: Any,
+    ) -> Decision:
+        return self._post("/v1/compile-context", _payload(items=items, **kwargs))
+
+    def check_memory_read(
+        self,
+        content: str,
+        source_id: str | None = None,
+        **kwargs: Any,
+    ) -> Decision:
+        return self._post("/v1/check-memory-read", _payload(content=content, source_id=source_id, **kwargs))
+
+    def check_memory_write(
+        self,
+        content: str,
+        source_id: str | None = None,
+        **kwargs: Any,
+    ) -> Decision:
+        return self._post("/v1/check-memory-write", _payload(content=content, source_id=source_id, **kwargs))
+
+    def validate_plan(
+        self,
+        plan: list[PlanStep | dict[str, Any]],
+        **kwargs: Any,
+    ) -> ValidatePlanResponse:
+        steps = [step.model_dump(mode="json") if isinstance(step, PlanStep) else step for step in plan]
+        response = self._client.post("/v1/validate-plan", json=_payload(plan=steps, **kwargs))
+        response.raise_for_status()
+        return ValidatePlanResponse.model_validate(response.json())
 
     def _get(self, path: str) -> dict[str, str]:
         response = self._client.get(path)

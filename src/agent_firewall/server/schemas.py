@@ -12,7 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agent_firewall.core.models import Actor, AgentIdentity, ContentItem, SessionState
+from agent_firewall.core.enums import DecisionAction
+from agent_firewall.core.models import Actor, AgentIdentity, ContentItem, Decision, SessionState
 
 
 class IngressRequest(BaseModel):
@@ -52,3 +53,72 @@ class OutputRequest(BaseModel):
     workflow: str | None = None
     session_id: str | None = None
     session_state: SessionState | None = None
+
+
+class CompileContextRequest(BaseModel):
+    """A list of RAG-retrieved content blocks (each with its own
+    `provenance`) to scan before they are assembled into the model's context
+    window. Equivalent to an `action=ingress` check over `items`."""
+
+    items: list[ContentItem]
+    actor: Actor | None = None
+    agent: AgentIdentity | None = None
+    workflow: str | None = None
+    session_id: str | None = None
+    session_state: SessionState | None = None
+
+
+class MemoryReadRequest(BaseModel):
+    """Content retrieved from a memory/vector store, about to be injected
+    into context. Always evaluated as `retrieved_doc` provenance regardless
+    of the original source -- this is where memory-poisoning content is
+    caught by the input guard's injection detector."""
+
+    content: str
+    source_id: str | None = None
+    actor: Actor | None = None
+    agent: AgentIdentity | None = None
+    workflow: str | None = None
+    session_id: str | None = None
+    session_state: SessionState | None = None
+
+
+class MemoryWriteRequest(BaseModel):
+    """Content about to be persisted to a memory/vector store. Runs the
+    output guard (DLP) so secrets/PII are redacted before being stored."""
+
+    content: str
+    source_id: str | None = None
+    actor: Actor | None = None
+    agent: AgentIdentity | None = None
+    workflow: str | None = None
+    session_id: str | None = None
+    session_state: SessionState | None = None
+
+
+class PlanStep(BaseModel):
+    """One planned tool call. `content` carries `triggering_provenance` --
+    see `guards/tool_guard.py`'s provenance-escalation check."""
+
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    content: list[ContentItem] | None = None
+
+
+class ValidatePlanRequest(BaseModel):
+    """A multi-step tool-call plan to validate *before* executing any of it."""
+
+    plan: list[PlanStep]
+    actor: Actor | None = None
+    agent: AgentIdentity | None = None
+    workflow: str | None = None
+    session_id: str | None = None
+    session_state: SessionState | None = None
+
+
+class ValidatePlanResponse(BaseModel):
+    """`overall` is the worst-action-wins `Decision.decision` across `steps`,
+    one per `ValidatePlanRequest.plan` entry, in order."""
+
+    overall: DecisionAction
+    steps: list[Decision]

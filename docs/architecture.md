@@ -250,12 +250,17 @@ src/agent_firewall/
 ├── policy/           # match-dict evaluator, risk scoring, Verdict aggregation
 ├── guards/           # input_guard, tool_guard, output_guard, session_guard
 ├── approval/         # ApprovalProvider protocol: auto_deny (default), cli_prompt
-├── audit/            # AuditLogger + AuditEvent + sinks (jsonl_file)
-├── session/          # SessionStore protocol + in-memory implementation
+├── audit/            # AuditLogger + AuditEvent + sinks (jsonl_file, http_batch)
+├── session/          # SessionStore protocol: in-memory + Redis implementations, factory
 ├── tools/            # ToolManifest re-exports for tool registration
+├── control_plane/    # PolicyBundleSource protocol + HttpPolicyBundleSource (hybrid control plane)
+├── integrations/     # AgentFirewallMiddleware (ASGI) + FastAPI re-export
+├── observability/    # structured logging, OpenTelemetry tracing, Prometheus metrics
+├── server/           # FastAPI sidecar app, routes, request/response schemas
+├── client.py         # AgentFirewallClient — httpx client for the sidecar
 ├── engine.py         # Engine — the single shared policy core (authorize())
 ├── firewall.py       # AgentFirewall public API (wrap_tool, @firewall.tool, wrap_agent)
-└── cli/              # `agent-firewall` typer CLI (init, validate-config, scan, ...)
+└── cli/              # `agent-firewall` typer CLI (init, validate-config, scan, serve, ...)
 ```
 
 This maps directly onto the components in §4: the **Input / Prompt Gateway** is
@@ -290,7 +295,7 @@ matter of **configuration** (policy + trust-label mapping), not new code.
 | **SDK** | `firewall = AgentFirewall.from_config(...)`; call `firewall.authorize(...)` for ingress/model-request/output checks, and `firewall.check_output(...)` before returning text to a user or downstream system. | Add calls at the ingress/egress points of your loop | Custom agent loops where you control the message-handling code directly. | 1 |
 | **Tool broker** | Register each tool's `ToolManifest` and wrap its implementation with `firewall.wrap_tool(...)` / `@firewall.tool(manifest=...)`; the Tool-Call Guard (schema, SSRF, path-traversal, egress, credential-exfil, approval routing) and Output Guard (DLP on tool results) run automatically on every call. | Wrap each tool function | Any framework where you control the tool dispatcher — LangChain tools, MCP tool implementations, custom function-calling loops. | 1 |
 | **ASGI middleware** | `AgentFirewallMiddleware` wraps a FastAPI/Starlette (or other ASGI) app, running `check-ingress` on requests and `check-output` on responses, attaching `trace_id`/`Decision` to `request.state`. | Add one middleware line | Agent backends already exposed as an ASGI HTTP service. | 3 |
-| **Sidecar / API service** | Run `agent-firewall serve` as a sidecar container exposing `/v1/authorize`, `/v1/check-ingress`, `/v1/authorize-tool-call`, `/v1/check-output`, etc.; any process (any language) calls these endpoints, or routes egress traffic through it. | None — infra-level; call over HTTP | Containerized/Kubernetes deployments, polyglot agent stacks, or workflows where you can't import a Python package directly. | 2 |
+| **Sidecar / API service** | Run `agent-firewall serve` as a sidecar container exposing `/v1/authorize`, `/v1/check-ingress`, `/v1/check-model-request`, `/v1/authorize-tool-call`, `/v1/check-output`, `/v1/compile-context`, `/v1/check-memory-read`, `/v1/check-memory-write`, `/v1/validate-plan`, and `/metrics`; any process (any language) calls these endpoints, or routes egress traffic through it. | None — infra-level; call over HTTP | Containerized/Kubernetes deployments, polyglot agent stacks, or workflows where you can't import a Python package directly. | 2/3 |
 
 All four modes are thin adapters around the **same** `Engine.authorize()` — the SDK and
 tool-broker call it in-process (Phase 1), the sidecar exposes it over HTTP (Phase 2),

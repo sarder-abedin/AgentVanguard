@@ -29,7 +29,7 @@ from agent_firewall.core.models import (
 from agent_firewall.detectors.registry import DetectorRegistry
 from agent_firewall.policy.evaluator import PolicyEvaluator
 from agent_firewall.policy.matcher import MatchContext, matches
-from agent_firewall.policy.risk import aggregate, finding_score, max_score
+from agent_firewall.policy.risk import aggregate, finding_score, max_score, worst_action
 
 # ---------------------------------------------------------------------------
 # risk scoring + aggregation
@@ -80,6 +80,17 @@ def test_aggregate_propagates_redacted_content() -> None:
     decision = aggregate(verdicts)
 
     assert decision.redacted_content == "redacted text"
+
+
+def test_worst_action_empty_is_allow() -> None:
+    assert worst_action([]) == DecisionAction.ALLOW
+
+
+def test_worst_action_picks_highest_priority() -> None:
+    actions = [DecisionAction.ALLOW, DecisionAction.ALLOW_WITH_MODIFICATIONS, DecisionAction.REQUIRE_USER_CONFIRMATION]
+
+    assert worst_action(actions) == DecisionAction.REQUIRE_USER_CONFIRMATION
+    assert worst_action([*actions, DecisionAction.DENY]) == DecisionAction.DENY
 
 
 # ---------------------------------------------------------------------------
