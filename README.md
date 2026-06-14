@@ -8,6 +8,8 @@ framework in use.
 
 See [docs/architecture.md](docs/architecture.md) for the full firewall design: threat
 model, core components, and the principles that make it applicable to any workflow.
+New to Agent Firewall? Start with [TUTORIAL.md](TUTORIAL.md) for a
+plain-language walkthrough of what it does and how to use it.
 
 ## Installation
 
