@@ -4,9 +4,10 @@
 (falling back to `PolicyInput.session_state` or a fresh state), runs the
 session guard, then persists the updated state back via `put()`.
 
-`InMemorySessionStore` is process-local and not shared across replicas — a
-`RedisSessionStore` (same protocol) is planned for multi-replica sidecar
-deployments (Phase 3).
+`InMemorySessionStore` is process-local and not shared across replicas — use
+`agent_firewall.session.redis_store.RedisSessionStore` (same protocol, built
+via `agent_firewall.session.factory.build_session_store`) for multi-replica
+sidecar deployments.
 """
 
 from __future__ import annotations

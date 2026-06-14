@@ -28,10 +28,22 @@ class FirewallSection(BaseModel):
     approval_provider: Literal["auto_deny", "cli_prompt"] = "auto_deny"
 
 
+class HttpBatchAuditConfig(BaseModel):
+    """Optional `HttpBatchAuditSink`, used alongside (not instead of) the
+    `jsonl` sink to ship audit events to a central collector."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    batch_size: int = 50
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout: float = 10.0
+
+
 class AuditSection(BaseModel):
     backend: Literal["jsonl"] = "jsonl"
     path: str = "./logs/agent_firewall_audit.jsonl"
     redact_secrets: bool = True
+    http_batch: HttpBatchAuditConfig = Field(default_factory=HttpBatchAuditConfig)
 
 
 class RuntimeLimits(BaseModel):
@@ -60,6 +72,16 @@ class ToolGuardSection(BaseModel):
 
     workspace_root: str = "."
     egress_allowlist: list[str] = Field(default_factory=list)
+
+
+class SessionStoreSection(BaseModel):
+    """`SessionStore` backend. `in_memory` (default) is process-local;
+    `redis` is shared across replicas (requires the `redis` extra)."""
+
+    backend: Literal["in_memory", "redis"] = "in_memory"
+    redis_url: str = "redis://localhost:6379/0"
+    key_prefix: str = "agent_firewall:session:"
+    ttl_seconds: int | None = 3600
 
 
 class ToolConfig(BaseModel):
@@ -117,6 +139,7 @@ class Config(BaseModel):
         default_factory=lambda: dict(DEFAULT_PROVENANCE_MAPPING)
     )
     tool_guard: ToolGuardSection = Field(default_factory=ToolGuardSection)
+    session_store: SessionStoreSection = Field(default_factory=SessionStoreSection)
     tools: dict[str, ToolConfig] = Field(default_factory=dict)
     workflows: dict[str, WorkflowConfig] = Field(default_factory=dict)
     rules: list[RuleConfig] = Field(default_factory=list)

@@ -22,6 +22,8 @@ fastapi = ["fastapi", "starlette"]
 server = ["fastapi", "uvicorn[standard]", "starlette", "httpx"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-pyyaml", "types-jsonschema"]
 otel = ["opentelemetry-api", "opentelemetry-sdk"]
+metrics = ["prometheus-client"]
+redis = ["redis"]
 
 [project.scripts]
 agent-firewall = "agent_firewall.cli.main:app"

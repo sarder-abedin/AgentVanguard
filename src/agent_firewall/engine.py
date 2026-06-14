@@ -21,6 +21,8 @@ invariant of agent-firewall.
 
 from __future__ import annotations
 
+import time
+
 from agent_firewall.approval import build_approval_provider
 from agent_firewall.audit.logger import AuditLogger
 from agent_firewall.config.schema import Config
@@ -28,9 +30,10 @@ from agent_firewall.core.enums import ActionKind, DecisionAction
 from agent_firewall.core.models import Decision, PolicyInput, SessionState, ToolManifest
 from agent_firewall.detectors.registry import DetectorRegistry
 from agent_firewall.guards.session_guard import call_hash
+from agent_firewall.observability import metrics, tracing
 from agent_firewall.policy.evaluator import PolicyEvaluator
 from agent_firewall.policy.risk import aggregate
-from agent_firewall.session.store import InMemorySessionStore
+from agent_firewall.session.factory import build_session_store
 
 
 class Engine:
@@ -42,7 +45,7 @@ class Engine:
         self.detectors = DetectorRegistry.from_config(config)
         self.tool_manifests: dict[str, ToolManifest] = config.tool_manifests()
         self.evaluator = PolicyEvaluator(config)
-        self.session_store = InMemorySessionStore()
+        self.session_store = build_session_store(config)
         self.approval = build_approval_provider(config)
         self.audit = AuditLogger.from_config(config, self.detectors)
 
@@ -54,21 +57,25 @@ class Engine:
         self.tool_manifests[manifest.name] = manifest
 
     def authorize(self, policy_input: PolicyInput) -> Decision:
-        session_state = self._resolve_session_state(policy_input)
+        start = time.monotonic()
 
-        verdicts = self.evaluator.evaluate(policy_input, self.detectors, self.tool_manifests, session_state)
-        decision = aggregate(verdicts)
+        with tracing.span("agent_firewall.authorize", action=policy_input.action.value):
+            session_state = self._resolve_session_state(policy_input)
 
-        if decision.decision == DecisionAction.REQUIRE_USER_CONFIRMATION:
-            if self.approval.request_approval(decision, policy_input):
-                downgraded = (
-                    DecisionAction.ALLOW_WITH_MODIFICATIONS if decision.redactions else DecisionAction.ALLOW
-                )
-                decision = decision.model_copy(update={"decision": downgraded})
+            verdicts = self.evaluator.evaluate(policy_input, self.detectors, self.tool_manifests, session_state)
+            decision = aggregate(verdicts)
 
-        self._update_session_state(session_state, policy_input, decision)
-        self.audit.log(policy_input, decision, verdicts)
+            if decision.decision == DecisionAction.REQUIRE_USER_CONFIRMATION:
+                if self.approval.request_approval(decision, policy_input):
+                    downgraded = (
+                        DecisionAction.ALLOW_WITH_MODIFICATIONS if decision.redactions else DecisionAction.ALLOW
+                    )
+                    decision = decision.model_copy(update={"decision": downgraded})
 
+            self._update_session_state(session_state, policy_input, decision)
+            self.audit.log(policy_input, decision, verdicts)
+
+        metrics.record_decision(policy_input.action.value, decision.decision.value, time.monotonic() - start)
         return decision
 
     def _resolve_session_state(self, policy_input: PolicyInput) -> SessionState:

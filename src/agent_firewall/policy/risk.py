@@ -57,6 +57,18 @@ def max_score(scores: Iterable[float]) -> float:
     return max(scores) if scores else 0.0
 
 
+def worst_action(actions: Iterable[DecisionAction]) -> DecisionAction:
+    """The worst (highest-priority) action among `actions` (DENY >
+    REQUIRE_USER_CONFIRMATION > ALLOW_WITH_MODIFICATIONS > ALLOW), or `ALLOW`
+    if `actions` is empty. Used both by `aggregate` (per-`Verdict`) and by
+    callers that need to combine several `Decision`s, e.g. `/v1/validate-plan`."""
+
+    actions = list(actions)
+    if not actions:
+        return DecisionAction.ALLOW
+    return max(actions, key=lambda a: _ACTION_RANK[a])
+
+
 def aggregate(verdicts: list[Verdict]) -> Decision:
     """Reduce per-stage `Verdict`s into the final `Decision`.
 
@@ -69,7 +81,7 @@ def aggregate(verdicts: list[Verdict]) -> Decision:
     if not verdicts:
         return Decision(decision=DecisionAction.ALLOW)
 
-    worst = max(verdicts, key=lambda v: _ACTION_RANK[v.action]).action
+    worst = worst_action(v.action for v in verdicts)
 
     reasons: list[str] = []
     required_approvals: list[str] = []

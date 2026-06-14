@@ -9,17 +9,24 @@ here.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
-from agent_firewall.core.enums import ActionKind
-from agent_firewall.core.models import Decision, PolicyInput
+from agent_firewall.core.enums import ActionKind, ProvenanceLabel
+from agent_firewall.core.models import ContentItem, Decision, PolicyInput
 from agent_firewall.firewall import AgentFirewall
+from agent_firewall.observability import metrics
+from agent_firewall.policy.risk import worst_action
 from agent_firewall.server.deps import get_firewall
 from agent_firewall.server.schemas import (
+    CompileContextRequest,
     IngressRequest,
+    MemoryReadRequest,
+    MemoryWriteRequest,
     ModelRequestRequest,
     OutputRequest,
     ToolCallRequest,
+    ValidatePlanRequest,
+    ValidatePlanResponse,
 )
 
 router = APIRouter()
@@ -91,3 +98,62 @@ def check_output(req: OutputRequest, firewall: AgentFirewall = Depends(get_firew
     return firewall.authorize(
         PolicyInput(action=ActionKind.OUTPUT, arguments={"destination": req.destination}, **data)
     )
+
+
+@router.post("/v1/compile-context", response_model=Decision)
+def compile_context(req: CompileContextRequest, firewall: AgentFirewall = Depends(get_firewall)) -> Decision:
+    """`action=ingress` wrapper over a list of RAG-retrieved `ContentItem`s,
+    each carrying its own `provenance`."""
+
+    data = req.model_dump(exclude={"items"})
+    return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=req.items, **data))
+
+
+@router.post("/v1/check-memory-read", response_model=Decision)
+def check_memory_read(req: MemoryReadRequest, firewall: AgentFirewall = Depends(get_firewall)) -> Decision:
+    """`action=ingress` wrapper that always tags `content` as
+    `retrieved_doc` provenance, regardless of the original source -- this is
+    where memory-poisoning content is caught by the input guard's injection
+    detector."""
+
+    data = req.model_dump(exclude={"content", "source_id"})
+    content = [ContentItem(text=req.content, provenance=ProvenanceLabel.RETRIEVED_DOC, source_id=req.source_id)]
+    return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=content, **data))
+
+
+@router.post("/v1/check-memory-write", response_model=Decision)
+def check_memory_write(req: MemoryWriteRequest, firewall: AgentFirewall = Depends(get_firewall)) -> Decision:
+    """`action=output` wrapper -- runs the output guard (DLP) over content
+    about to be persisted to a memory/vector store."""
+
+    data = req.model_dump(exclude={"content", "source_id"})
+    return firewall.authorize(
+        PolicyInput(action=ActionKind.OUTPUT, content=req.content, arguments={"destination": "plain"}, **data)
+    )
+
+
+@router.post("/v1/validate-plan", response_model=ValidatePlanResponse)
+def validate_plan(req: ValidatePlanRequest, firewall: AgentFirewall = Depends(get_firewall)) -> ValidatePlanResponse:
+    """Validate a multi-step tool-call plan *before* executing any of it.
+
+    Each step is authorized as `action=tool_call` (in order, so session
+    counters/repetition tracking accumulate across steps); `overall` is the
+    worst-action-wins `Decision.decision` across all steps.
+    """
+
+    shared = req.model_dump(exclude={"plan"})
+    steps = [
+        firewall.authorize(
+            PolicyInput(action=ActionKind.TOOL_CALL, tool=step.tool, arguments=step.arguments, content=step.content, **shared)
+        )
+        for step in req.plan
+    ]
+    return ValidatePlanResponse(overall=worst_action(step.decision for step in steps), steps=steps)
+
+
+@router.get("/metrics")
+def metrics_endpoint() -> Response:
+    """Prometheus exposition format, or an empty body if the `metrics` extra
+    isn't installed."""
+
+    return Response(content=metrics.render_latest(), media_type=metrics.CONTENT_TYPE_LATEST)

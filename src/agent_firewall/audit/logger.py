@@ -13,6 +13,7 @@ from typing import Any
 
 from agent_firewall.audit.events import AuditEvent
 from agent_firewall.audit.sinks.base import AuditSink
+from agent_firewall.audit.sinks.http_batch import HttpBatchAuditSink
 from agent_firewall.audit.sinks.jsonl_file import JsonlFileSink
 from agent_firewall.config.schema import Config
 from agent_firewall.core.enums import ProvenanceLabel
@@ -32,6 +33,15 @@ class AuditLogger:
         sinks: list[AuditSink] = []
         if config.audit.backend == "jsonl":
             sinks.append(JsonlFileSink(config.audit.path))
+        if config.audit.http_batch.enabled:
+            sinks.append(
+                HttpBatchAuditSink(
+                    config.audit.http_batch.endpoint,
+                    batch_size=config.audit.http_batch.batch_size,
+                    headers=config.audit.http_batch.headers,
+                    timeout=config.audit.http_batch.timeout,
+                )
+            )
         return cls(sinks, config, detectors)
 
     def log(self, policy_input: PolicyInput, decision: Decision, verdicts: list[Verdict]) -> AuditEvent:
