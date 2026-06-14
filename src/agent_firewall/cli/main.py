@@ -1,7 +1,7 @@
 """`agent-firewall` CLI (typer).
 
 Commands: `init`, `validate-config`, `scan`, `check-ingress`, `doctor`,
-`version`. `serve` is added in Phase 2 behind the `[server]` extra.
+`serve`, `version`. `serve` requires the `[server]` extra.
 """
 
 from __future__ import annotations
@@ -138,6 +138,34 @@ def doctor(
         color = "green" if installed else "yellow"
         status = "installed" if installed else "not installed"
         console.print(f"[{color}]{extra_name} extra ({module_name}): {status}[/{color}]")
+
+
+@app.command()
+def serve(
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to agent_firewall.yaml."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
+    port: int = typer.Option(8080, "--port", help="Bind port."),
+) -> None:
+    """Run the agent-firewall sidecar/API service (requires the `server` extra)."""
+
+    try:
+        import uvicorn
+
+        from agent_firewall.server.app import create_app
+    except ImportError as exc:
+        console.print(
+            "[red]The 'server' extra is required for `agent-firewall serve`.[/red] "
+            "Install it with: pip install 'agent-firewall[server]'"
+        )
+        raise typer.Exit(code=1) from exc
+
+    try:
+        cfg = load(config)
+    except ConfigError as exc:
+        console.print(f"[red]Invalid config:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    uvicorn.run(create_app(cfg), host=host, port=port)
 
 
 @app.command()

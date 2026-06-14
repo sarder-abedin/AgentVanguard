@@ -1,0 +1,18 @@
+services:
+  agent-firewall:
+    build: .
+    image: agent-firewall:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./agent_firewall.yaml:/app/agent_firewall.yaml:ro
+      - ./logs:/app/logs
+    environment:
+      - AGENT_FIREWALL_CONFIG=/app/agent_firewall.yaml
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

@@ -59,3 +59,34 @@ See [`examples/`](examples/) for complete, runnable scripts (`sdk_quickstart.py`
 `tool_broker_quickstart.py`, `mock_agent_loop.py`) and
 [docs/architecture.md §7](docs/architecture.md#7-applying-agent-firewall-to-any-workflow)
 for all integration modes (SDK, tool broker, ASGI middleware, sidecar).
+
+### Sidecar / API service
+
+Install the `server` extra and run the HTTP service — useful for polyglot
+stacks or infra-level egress mediation:
+
+```bash
+pip install -e ".[server]"
+agent-firewall serve --config agent_firewall.yaml --host 0.0.0.0 --port 8080
+```
+
+Endpoints: `GET /healthz`, `GET /readyz`, `POST /v1/authorize`,
+`/v1/check-ingress`, `/v1/check-model-request`, `/v1/authorize-tool-call`,
+`/v1/check-output`. Call them from any language, or from Python via
+`agent_firewall.client.AgentFirewallClient`:
+
+```python
+from agent_firewall.client import AgentFirewallClient
+
+client = AgentFirewallClient("http://localhost:8080")
+decision = client.check_ingress("hello there")
+```
+
+### Docker / Kubernetes
+
+```bash
+docker compose up --build   # builds the image and runs `agent-firewall serve` on :8080
+```
+
+See [`deploy/kubernetes/`](deploy/kubernetes/) for `Deployment`/`Service`/`ConfigMap`
+manifests (non-root, read-only root filesystem, `/healthz`/`/readyz` probes).
