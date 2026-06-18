@@ -1,12 +1,12 @@
-"""Unit tests for `agent_firewall.guards.output_guard` (DLP/output guard)."""
+"""Unit tests for `agentvanguard.guards.output_guard` (DLP/output guard)."""
 
 from __future__ import annotations
 
-from agent_firewall.config.schema import Config
-from agent_firewall.core.enums import ActionKind, DecisionAction, FindingType
-from agent_firewall.core.models import PolicyInput
-from agent_firewall.detectors.registry import DetectorRegistry
-from agent_firewall.guards import output_guard
+from agentvanguard.config.schema import Config
+from agentvanguard.core.enums import ActionKind, DecisionAction, FindingType
+from agentvanguard.core.models import PolicyInput
+from agentvanguard.detectors.registry import DetectorRegistry
+from agentvanguard.guards import output_guard
 
 
 def _evaluate(text: str, config: Config | None = None, destination: str = "plain"):

@@ -1,12 +1,12 @@
-"""Unit tests for `agent_firewall.guards.session_guard`."""
+"""Unit tests for `agentvanguard.guards.session_guard`."""
 
 from __future__ import annotations
 
-from agent_firewall.config.schema import Config
-from agent_firewall.core.enums import ActionKind, DecisionAction, FindingType
-from agent_firewall.core.models import PolicyInput, SessionState
-from agent_firewall.guards import session_guard
-from agent_firewall.guards.session_guard import call_hash
+from agentvanguard.config.schema import Config
+from agentvanguard.core.enums import ActionKind, DecisionAction, FindingType
+from agentvanguard.core.models import PolicyInput, SessionState
+from agentvanguard.guards import session_guard
+from agentvanguard.guards.session_guard import call_hash
 
 
 def test_within_limits_is_allowed() -> None:

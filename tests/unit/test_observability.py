@@ -1,4 +1,4 @@
-"""Unit tests for `agent_firewall.observability` (logging, metrics, tracing).
+"""Unit tests for `agentvanguard.observability` (logging, metrics, tracing).
 
 `prometheus-client` and `opentelemetry-api`/`-sdk` are installed in the dev
 environment, so `metrics.available()`/`tracing.available()` are exercised in
@@ -14,13 +14,13 @@ import logging
 
 import pytest
 
-from agent_firewall.observability import metrics, tracing
-from agent_firewall.observability.logging import JsonFormatter, configure_logging
+from agentvanguard.observability import metrics, tracing
+from agentvanguard.observability.logging import JsonFormatter, configure_logging
 
 
 def _make_record(**extra: str) -> logging.LogRecord:
     record = logging.LogRecord(
-        name="agent_firewall.test",
+        name="agentvanguard.test",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
@@ -39,7 +39,7 @@ def test_json_formatter_basic_fields() -> None:
 
     assert payload["message"] == "hello world"
     assert payload["level"] == "INFO"
-    assert payload["logger"] == "agent_firewall.test"
+    assert payload["logger"] == "agentvanguard.test"
     assert "timestamp" in payload
 
 
@@ -75,7 +75,7 @@ def _restore_root_logger():
 def test_configure_logging_emits_json_lines(capsys: pytest.CaptureFixture[str], _restore_root_logger: None) -> None:
     configure_logging("DEBUG")
 
-    logging.getLogger("agent_firewall.test").info("hello")
+    logging.getLogger("agentvanguard.test").info("hello")
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out.strip())
@@ -92,7 +92,7 @@ def test_record_decision_appears_in_render_latest() -> None:
 
     output = metrics.render_latest()
 
-    assert b"agent_firewall_decisions_total" in output
+    assert b"agentvanguard_decisions_total" in output
     assert b'action="ingress"' in output
 
 
@@ -101,5 +101,5 @@ def test_tracing_available() -> None:
 
 
 def test_span_is_a_usable_context_manager() -> None:
-    with tracing.span("agent_firewall.test", action="ingress"):
+    with tracing.span("agentvanguard.test", action="ingress"):
         pass

@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-`agent-firewall` (package `agent_firewall`, src-layout under `src/`) is a
+`agentvanguard` (package `agentvanguard`, src-layout under `src/`) is a
 workflow-agnostic firewall for LLM-based agentic systems. It mediates three
 trust boundaries — input/context (ingress), tool/action calls, and output —
 plus session-level runtime limits. See `docs/architecture.md` for the full
@@ -19,10 +19,10 @@ pytest -q                      # run the full test suite
 ruff check src/ tests/         # lint
 mypy src/                       # type-check
 
-agent-firewall init             # write agent_firewall.yaml
-agent-firewall validate-config
-agent-firewall doctor
-agent-firewall serve --config agent_firewall.yaml --port 8080   # requires [server] extra
+agentvanguard init             # write agentvanguard.yaml
+agentvanguard validate-config
+agentvanguard doctor
+agentvanguard serve --config agentvanguard.yaml --port 8080   # requires [server] extra
 ```
 
 There is no separate lint/format config beyond `pyproject.toml` defaults —
@@ -30,7 +30,7 @@ keep `ruff` and `mypy` clean before committing.
 
 ## Architecture invariant
 
-**`agent_firewall.engine.Engine` is the single shared, synchronous,
+**`agentvanguard.engine.Engine` is the single shared, synchronous,
 in-memory policy core.** Every integration surface — SDK (`firewall.py`),
 tool broker, ASGI middleware (`integrations/asgi.py`), and the sidecar HTTP
 routes (`server/routes.py`) — builds a `PolicyInput` and calls
@@ -47,7 +47,7 @@ for `policy_input.action` (`ingress`/`model_request`/`tool_call`/`output`) ->
 Fail-closed by default: unknown tools, unknown workflows, and bundle-fetch
 failures (depending on `fail_mode`) deny or restrict rather than allow.
 
-## Package layout (`src/agent_firewall/`)
+## Package layout (`src/agentvanguard/`)
 
 - `core/` — enums, pydantic models (`PolicyInput`, `Verdict`, `Decision`,
   `ToolManifest`, etc.), errors.
@@ -66,11 +66,11 @@ failures (depending on `fail_mode`) deny or restrict rather than allow.
   `factory.py` to select backend from config.
 - `control_plane/` — `PolicyBundleSource` protocol + `HttpPolicyBundleSource`
   for fetching config bundles from a central policy server.
-- `integrations/` — `AgentFirewallMiddleware` (ASGI) + FastAPI re-export.
+- `integrations/` — `AgentVanguardMiddleware` (ASGI) + FastAPI re-export.
 - `observability/` — structured logging, OpenTelemetry tracing, Prometheus
   metrics (`/metrics`).
 - `server/` — FastAPI sidecar app (`app.py`, `routes.py`, `schemas.py`).
-- `client.py` — `AgentFirewallClient`, an httpx client mirroring the sidecar
+- `client.py` — `AgentVanguardClient`, an httpx client mirroring the sidecar
   routes.
 - `engine.py`, `firewall.py` (public SDK API), `cli/main.py` (typer CLI).
 
@@ -78,8 +78,8 @@ failures (depending on `fail_mode`) deny or restrict rather than allow.
 
 - `tests/unit/` — one module per detector/guard/component; assert exact
   `Finding`/`Verdict`/`Decision` outputs.
-- `tests/integration/` — end-to-end through `Engine`/`AgentFirewall`/
-  `AgentFirewallClient` (the latter spins up a real `uvicorn` server on an
+- `tests/integration/` — end-to-end through `Engine`/`AgentVanguard`/
+  `AgentVanguardClient` (the latter spins up a real `uvicorn` server on an
   ephemeral port).
 - `tests/fixtures/payloads/` — known injection/SSRF/PII/secret samples.
 - No network access or API keys required — all detectors are heuristic/regex.

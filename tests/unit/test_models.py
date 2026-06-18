@@ -1,11 +1,11 @@
-"""Unit tests for `agent_firewall.core.models`."""
+"""Unit tests for `agentvanguard.core.models`."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from agent_firewall.core.enums import (
+from agentvanguard.core.enums import (
     ActionKind,
     ActionType,
     DecisionAction,
@@ -14,7 +14,7 @@ from agent_firewall.core.enums import (
     ProvenanceLabel,
     RiskTier,
 )
-from agent_firewall.core.models import (
+from agentvanguard.core.models import (
     Actor,
     AgentIdentity,
     ContentItem,

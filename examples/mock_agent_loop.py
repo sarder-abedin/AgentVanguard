@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_firewall import ActionType, AgentFirewall, AgentIdentity, RiskTier, SideEffect, ToolManifest
-from agent_firewall.core.errors import FirewallBlockedError
+from agentvanguard import ActionType, AgentVanguard, AgentIdentity, RiskTier, SideEffect, ToolManifest
+from agentvanguard.core.errors import VanguardBlockedError
 
-CONFIG_PATH = str(Path(__file__).parent / "agent_firewall.yaml")
+CONFIG_PATH = str(Path(__file__).parent / "agentvanguard.yaml")
 
-firewall = AgentFirewall.from_config(CONFIG_PATH)
+firewall = AgentVanguard.from_config(CONFIG_PATH)
 
 SUPPORT_AGENT = AgentIdentity(name="support_agent", workflow="customer_support")
 SESSION_ID = "mock-agent-loop-demo"
@@ -49,7 +49,7 @@ class StuckAgent:
         for _ in range(6):
             try:
                 results.append(lookup_order(order_id="1234", _context=CONTEXT))
-            except FirewallBlockedError as exc:
+            except VanguardBlockedError as exc:
                 results.append(f"blocked: {exc.decision.decision.value}")
                 break
         return "; ".join(results)

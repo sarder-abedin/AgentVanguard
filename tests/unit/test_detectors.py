@@ -1,4 +1,4 @@
-"""Unit tests for `agent_firewall.detectors.*`.
+"""Unit tests for `agentvanguard.detectors.*`.
 
 `tests/fixtures/payloads/*.txt` provide curated samples; lines starting with
 `#` and blank lines are comments and skipped.
@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_firewall.core.enums import FindingType, ProvenanceLabel, RiskTier
-from agent_firewall.detectors.exfil import ExfilDetector
-from agent_firewall.detectors.injection import InjectionDetector
-from agent_firewall.detectors.pii import PIIDetector
-from agent_firewall.detectors.secrets import SecretsDetector
-from agent_firewall.policy.risk import finding_score
+from agentvanguard.core.enums import FindingType, ProvenanceLabel, RiskTier
+from agentvanguard.detectors.exfil import ExfilDetector
+from agentvanguard.detectors.injection import InjectionDetector
+from agentvanguard.detectors.pii import PIIDetector
+from agentvanguard.detectors.secrets import SecretsDetector
+from agentvanguard.policy.risk import finding_score
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "payloads"
 

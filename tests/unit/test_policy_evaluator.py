@@ -1,12 +1,12 @@
-"""Unit tests for `agent_firewall.policy.*` (matcher, risk aggregation, and
+"""Unit tests for `agentvanguard.policy.*` (matcher, risk aggregation, and
 `PolicyEvaluator` dispatch / custom rules)."""
 
 from __future__ import annotations
 
 import pytest
 
-from agent_firewall.config.schema import Config, RuleConfig
-from agent_firewall.core.enums import (
+from agentvanguard.config.schema import Config, RuleConfig
+from agentvanguard.core.enums import (
     ActionKind,
     ActionType,
     DecisionAction,
@@ -15,8 +15,8 @@ from agent_firewall.core.enums import (
     ProvenanceLabel,
     RiskTier,
 )
-from agent_firewall.core.errors import PolicyError
-from agent_firewall.core.models import (
+from agentvanguard.core.errors import PolicyError
+from agentvanguard.core.models import (
     Actor,
     AgentIdentity,
     ContentItem,
@@ -26,10 +26,10 @@ from agent_firewall.core.models import (
     ToolManifest,
     Verdict,
 )
-from agent_firewall.detectors.registry import DetectorRegistry
-from agent_firewall.policy.evaluator import PolicyEvaluator
-from agent_firewall.policy.matcher import MatchContext, matches
-from agent_firewall.policy.risk import aggregate, finding_score, max_score, worst_action
+from agentvanguard.detectors.registry import DetectorRegistry
+from agentvanguard.policy.evaluator import PolicyEvaluator
+from agentvanguard.policy.matcher import MatchContext, matches
+from agentvanguard.policy.risk import aggregate, finding_score, max_score, worst_action
 
 # ---------------------------------------------------------------------------
 # risk scoring + aggregation

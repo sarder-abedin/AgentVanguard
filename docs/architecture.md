@@ -1,14 +1,13 @@
-# Agent Firewall Architecture
+# AgentVanguard Architecture
 
-> This is the design document for the **Agent Firewall** project (repository:
-> VanguardLLM), implemented as the Python package `agent_firewall` (PyPI/CLI name
-> `agent-firewall`). See [`src/agent_firewall/`](../src/agent_firewall/) for the
-> implementation and §6/§7 below for how the design maps onto the package layout and
-> integration modes.
+> This is the design document for the **AgentVanguard** project, implemented as
+> the Python package `agentvanguard` (PyPI/CLI name `agentvanguard`). See
+> [`src/agentvanguard/`](../src/agentvanguard/) for the implementation and §6/§7
+> below for how the design maps onto the package layout and integration modes.
 
 ## 1. Purpose
 
-Agent Firewall is a **workflow-agnostic firewall for LLM-based agentic systems**. It sits
+AgentVanguard is a **workflow-agnostic firewall for LLM-based agentic systems**. It sits
 between the components of any agent (user, model, tools/APIs, memory/RAG stores, and
 other agents) and enforces security controls regardless of the orchestration framework
 in use (LangChain, AutoGen, MCP-based agents, custom loops, etc.).
@@ -243,9 +242,9 @@ actions that can't be safely automated regardless of how good the automated chec
 ## 6. Project Layout
 
 ```
-src/agent_firewall/
+src/agentvanguard/
 ├── core/             # enums, pydantic models (PolicyInput, Verdict, Decision, ...), errors
-├── config/           # YAML schema, loader, built-in defaults (agent_firewall.yaml)
+├── config/           # YAML schema, loader, built-in defaults (agentvanguard.yaml)
 ├── detectors/        # injection, PII, secrets, exfiltration — heuristic/regex detectors
 ├── policy/           # match-dict evaluator, risk scoring, Verdict aggregation
 ├── guards/           # input_guard, tool_guard, output_guard, session_guard
@@ -254,13 +253,13 @@ src/agent_firewall/
 ├── session/          # SessionStore protocol: in-memory + Redis implementations, factory
 ├── tools/            # ToolManifest re-exports for tool registration
 ├── control_plane/    # PolicyBundleSource protocol + HttpPolicyBundleSource (hybrid control plane)
-├── integrations/     # AgentFirewallMiddleware (ASGI) + FastAPI re-export
+├── integrations/     # AgentVanguardMiddleware (ASGI) + FastAPI re-export
 ├── observability/    # structured logging, OpenTelemetry tracing, Prometheus metrics
 ├── server/           # FastAPI sidecar app, routes, request/response schemas
-├── client.py         # AgentFirewallClient — httpx client for the sidecar
+├── client.py         # AgentVanguardClient — httpx client for the sidecar
 ├── engine.py         # Engine — the single shared policy core (authorize())
-├── firewall.py       # AgentFirewall public API (wrap_tool, @firewall.tool, wrap_agent)
-└── cli/              # `agent-firewall` typer CLI (init, validate-config, scan, serve, ...)
+├── firewall.py       # AgentVanguard public API (wrap_tool, @firewall.tool, wrap_agent)
+└── cli/              # `agentvanguard` typer CLI (init, validate-config, scan, serve, ...)
 ```
 
 This maps directly onto the components in §4: the **Input / Prompt Gateway** is
@@ -278,13 +277,13 @@ Redis-backed `SessionStore`/hybrid control plane (§4.2, §4.8) are infrastructu
 concerns layered around the firewall by the deployment (Phase 2/3 sidecar, Kubernetes
 manifests) rather than logic inside the core engine.
 
-## 7. Applying Agent Firewall to Any Workflow
+## 7. Applying AgentVanguard to Any Workflow
 
 The reason the three-boundary model (§3) generalizes is that **almost every agentic
 workflow — regardless of framework — is built from the same underlying primitives**:
 a chat-completions-style message list sent to an LLM, a function/tool-calling
 response format, and a dispatcher that executes those calls and feeds results back as
-messages. Agent Firewall's detectors operate on *those* primitives, not on
+messages. AgentVanguard's detectors operate on *those* primitives, not on
 framework-specific abstractions. Onboarding a new workflow is therefore mostly a
 matter of **configuration** (policy + trust-label mapping), not new code.
 
@@ -292,10 +291,10 @@ matter of **configuration** (policy + trust-label mapping), not new code.
 
 | Mode | How it works | Code changes needed | Best for | Phase |
 |------|---------------|----------------------|----------|-------|
-| **SDK** | `firewall = AgentFirewall.from_config(...)`; call `firewall.authorize(...)` for ingress/model-request/output checks, and `firewall.check_output(...)` before returning text to a user or downstream system. | Add calls at the ingress/egress points of your loop | Custom agent loops where you control the message-handling code directly. | 1 |
+| **SDK** | `firewall = AgentVanguard.from_config(...)`; call `firewall.authorize(...)` for ingress/model-request/output checks, and `firewall.check_output(...)` before returning text to a user or downstream system. | Add calls at the ingress/egress points of your loop | Custom agent loops where you control the message-handling code directly. | 1 |
 | **Tool broker** | Register each tool's `ToolManifest` and wrap its implementation with `firewall.wrap_tool(...)` / `@firewall.tool(manifest=...)`; the Tool-Call Guard (schema, SSRF, path-traversal, egress, credential-exfil, approval routing) and Output Guard (DLP on tool results) run automatically on every call. | Wrap each tool function | Any framework where you control the tool dispatcher — LangChain tools, MCP tool implementations, custom function-calling loops. | 1 |
-| **ASGI middleware** | `AgentFirewallMiddleware` wraps a FastAPI/Starlette (or other ASGI) app, running `check-ingress` on requests and `check-output` on responses, attaching `trace_id`/`Decision` to `request.state`. | Add one middleware line | Agent backends already exposed as an ASGI HTTP service. | 3 |
-| **Sidecar / API service** | Run `agent-firewall serve` as a sidecar container exposing `/v1/authorize`, `/v1/check-ingress`, `/v1/check-model-request`, `/v1/authorize-tool-call`, `/v1/check-output`, `/v1/compile-context`, `/v1/check-memory-read`, `/v1/check-memory-write`, `/v1/validate-plan`, and `/metrics`; any process (any language) calls these endpoints, or routes egress traffic through it. | None — infra-level; call over HTTP | Containerized/Kubernetes deployments, polyglot agent stacks, or workflows where you can't import a Python package directly. | 2/3 |
+| **ASGI middleware** | `AgentVanguardMiddleware` wraps a FastAPI/Starlette (or other ASGI) app, running `check-ingress` on requests and `check-output` on responses, attaching `trace_id`/`Decision` to `request.state`. | Add one middleware line | Agent backends already exposed as an ASGI HTTP service. | 3 |
+| **Sidecar / API service** | Run `agentvanguard serve` as a sidecar container exposing `/v1/authorize`, `/v1/check-ingress`, `/v1/check-model-request`, `/v1/authorize-tool-call`, `/v1/check-output`, `/v1/compile-context`, `/v1/check-memory-read`, `/v1/check-memory-write`, `/v1/validate-plan`, and `/metrics`; any process (any language) calls these endpoints, or routes egress traffic through it. | None — infra-level; call over HTTP | Containerized/Kubernetes deployments, polyglot agent stacks, or workflows where you can't import a Python package directly. | 2/3 |
 
 All four modes are thin adapters around the **same** `Engine.authorize()` — the SDK and
 tool-broker call it in-process (Phase 1), the sidecar exposes it over HTTP (Phase 2),
