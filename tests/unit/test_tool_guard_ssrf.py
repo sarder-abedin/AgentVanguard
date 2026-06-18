@@ -64,6 +64,47 @@ def test_check_ssrf_ignores_non_host_arguments() -> None:
     assert findings == []
 
 
+def test_extract_host_bare_single_label_requires_key_hint() -> None:
+    """A bare, dot-less hostname (e.g. an internal service name like
+    "metadata") is only treated as a host candidate when the caller has
+    already confirmed host-like intent via the argument key
+    (`key_hint=True`); otherwise it is ignored to avoid DNS-lookup noise on
+    arbitrary prose values."""
+
+    assert tool_guard._extract_host("metadata", key_hint=False) is None
+    assert tool_guard._extract_host("metadata", key_hint=True) == "metadata"
+
+
+def test_check_ssrf_blocks_bare_ip_literal_under_unrelated_key() -> None:
+    """A bare IP-literal value (e.g. the cloud metadata address) must be
+    checked for SSRF regardless of the argument's key name -- gating purely
+    on `_URL_KEY_RE` would let a tool with a parameter named e.g. "ip" or
+    "target" reach blocked addresses untouched."""
+
+    findings = tool_guard._check_ssrf("target", "169.254.169.254", FETCH_URL_MANIFEST)
+
+    assert findings, "expected SSRF finding for a bare IP literal under a non-host-named key"
+    assert all(f.type == FindingType.SSRF for f in findings)
+
+
+def test_check_ssrf_blocks_bare_single_label_internal_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test: a bare single-label internal hostname (no dots,
+    e.g. "metadata") passed via a host-named argument must still be
+    resolved and checked for SSRF — in cloud environments such a name can
+    resolve to the metadata service (169.254.169.254) within a VPC."""
+
+    def fake_getaddrinfo(host: str, *args: object, **kwargs: object) -> list[tuple]:
+        assert host == "metadata"
+        return [(None, None, None, None, ("169.254.169.254", 0))]
+
+    monkeypatch.setattr(tool_guard.socket, "getaddrinfo", fake_getaddrinfo)
+
+    findings = tool_guard._check_ssrf("host", "metadata", FETCH_URL_MANIFEST)
+
+    assert findings, "expected SSRF finding for a bare internal hostname resolving to a blocked address"
+    assert all(f.type == FindingType.SSRF for f in findings)
+
+
 def test_check_ssrf_catches_dns_rebinding(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_getaddrinfo(host: str, *args: object, **kwargs: object) -> list[tuple]:
         assert host == "rebind.example.test"

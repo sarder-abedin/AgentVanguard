@@ -10,6 +10,7 @@ here.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 
 from agentvanguard.core.enums import ActionKind, ProvenanceLabel
 from agentvanguard.core.models import ContentItem, Decision, PolicyInput
@@ -30,6 +31,18 @@ from agentvanguard.server.schemas import (
 )
 
 router = APIRouter()
+
+
+def _data(req: BaseModel, exclude: set[str] | None = None) -> dict:
+    """`req.model_dump()`, always dropping `session_state`.
+
+    Over the network-facing sidecar, an unauthenticated caller must not be
+    able to forge or reset another `session_id`'s runtime-limit/repetition
+    counters by supplying a fabricated `SessionState` in the request body --
+    session state is always resolved server-side via the `SessionStore`.
+    """
+
+    return req.model_dump(exclude={"session_state"} | (exclude or set()))
 
 
 @router.get("/healthz")
@@ -60,8 +73,16 @@ def readyz(firewall: AgentVanguard = Depends(get_firewall)) -> dict[str, str]:
 
 @router.post("/v1/authorize", response_model=Decision)
 def authorize(policy_input: PolicyInput, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
-    """Generic endpoint: body is a full `PolicyInput`, returns a `Decision`."""
+    """Generic endpoint: body is a full `PolicyInput`, returns a `Decision`.
 
+    `session_state` is never honored from the request body here -- over the
+    network-facing sidecar, an unauthenticated caller could otherwise forge
+    or reset another `session_id`'s runtime-limit/repetition counters by
+    supplying a fabricated `SessionState`. Session state is always resolved
+    server-side from the `SessionStore`, keyed by `session_id`.
+    """
+
+    policy_input = policy_input.model_copy(update={"session_state": None})
     return firewall.authorize(policy_input)
 
 
@@ -69,7 +90,7 @@ def authorize(policy_input: PolicyInput, firewall: AgentVanguard = Depends(get_f
 def check_ingress(req: IngressRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=ingress` convenience wrapper."""
 
-    return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, **req.model_dump()))
+    return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, **_data(req)))
 
 
 @router.post("/v1/check-model-request", response_model=Decision)
@@ -78,7 +99,7 @@ def check_model_request(
 ) -> Decision:
     """`action=model_request` convenience wrapper."""
 
-    return firewall.authorize(PolicyInput(action=ActionKind.MODEL_REQUEST, **req.model_dump()))
+    return firewall.authorize(PolicyInput(action=ActionKind.MODEL_REQUEST, **_data(req)))
 
 
 @router.post("/v1/authorize-tool-call", response_model=Decision)
@@ -87,14 +108,14 @@ def authorize_tool_call(
 ) -> Decision:
     """`action=tool_call` convenience wrapper."""
 
-    return firewall.authorize(PolicyInput(action=ActionKind.TOOL_CALL, **req.model_dump()))
+    return firewall.authorize(PolicyInput(action=ActionKind.TOOL_CALL, **_data(req)))
 
 
 @router.post("/v1/check-output", response_model=Decision)
 def check_output(req: OutputRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=output` convenience wrapper."""
 
-    data = req.model_dump(exclude={"destination"})
+    data = _data(req, exclude={"destination"})
     return firewall.authorize(
         PolicyInput(action=ActionKind.OUTPUT, arguments={"destination": req.destination}, **data)
     )
@@ -105,7 +126,7 @@ def compile_context(req: CompileContextRequest, firewall: AgentVanguard = Depend
     """`action=ingress` wrapper over a list of RAG-retrieved `ContentItem`s,
     each carrying its own `provenance`."""
 
-    data = req.model_dump(exclude={"items"})
+    data = _data(req, exclude={"items"})
     return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=req.items, **data))
 
 
@@ -116,7 +137,7 @@ def check_memory_read(req: MemoryReadRequest, firewall: AgentVanguard = Depends(
     where memory-poisoning content is caught by the input guard's injection
     detector."""
 
-    data = req.model_dump(exclude={"content", "source_id"})
+    data = _data(req, exclude={"content", "source_id"})
     content = [ContentItem(text=req.content, provenance=ProvenanceLabel.RETRIEVED_DOC, source_id=req.source_id)]
     return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=content, **data))
 
@@ -126,7 +147,7 @@ def check_memory_write(req: MemoryWriteRequest, firewall: AgentVanguard = Depend
     """`action=output` wrapper -- runs the output guard (DLP) over content
     about to be persisted to a memory/vector store."""
 
-    data = req.model_dump(exclude={"content", "source_id"})
+    data = _data(req, exclude={"content", "source_id"})
     content = [ContentItem(text=req.content, provenance=ProvenanceLabel.ASSISTANT, source_id=req.source_id)]
     return firewall.authorize(
         PolicyInput(action=ActionKind.OUTPUT, content=content, arguments={"destination": "plain"}, **data)
@@ -142,7 +163,7 @@ def validate_plan(req: ValidatePlanRequest, firewall: AgentVanguard = Depends(ge
     worst-action-wins `Decision.decision` across all steps.
     """
 
-    shared = req.model_dump(exclude={"plan"})
+    shared = _data(req, exclude={"plan"})
     steps = [
         firewall.authorize(
             PolicyInput(action=ActionKind.TOOL_CALL, tool=step.tool, arguments=step.arguments, content=step.content, **shared)
