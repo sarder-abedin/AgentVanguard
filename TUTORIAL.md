@@ -256,6 +256,13 @@ pip install -e ".[server]"
 The `agentvanguard` command-line tool lets you try things out without
 writing any Python.
 
+**Fastest path**: skip straight to `agentvanguard quickstart`. It's an
+interactive wizard — it asks how you'll integrate (SDK, ASGI middleware,
+sidecar), lets you list your tools (or start from two examples you edit
+later), and writes a validated `agentvanguard.yaml` plus next steps tailored
+to what you picked. Steps 1–2 below show what it does under the hood, in
+case you'd rather build the config up by hand.
+
 ### Step 1 — Create a config file
 
 ```bash
@@ -666,6 +673,14 @@ can use to correlate with your own application logs.
 tail -f logs/agentvanguard_audit.jsonl
 ```
 
+Got a `trace_id` from a `Decision` and want a human-readable breakdown of why
+it fired — which findings, what risk score, what reasons — without
+hand-parsing JSONL? Use:
+
+```bash
+agentvanguard explain <trace_id>
+```
+
 ---
 
 ## 12. Common scenarios at a glance
@@ -681,6 +696,8 @@ tail -f logs/agentvanguard_audit.jsonl
 | Require a human to approve "send email" / "delete record" type actions | `risk_tier: high` + `requires_approval: true` (+ `approval_provider: cli_prompt` for local dev) |
 | Run the firewall for a non-Python service | `agentvanguard serve` (sidecar/API) |
 | Mediate an existing FastAPI app's traffic with no route changes | `AgentVanguardMiddleware` |
+| Get started without hand-writing a config | `agentvanguard quickstart` |
+| Understand why a past decision came out the way it did | `agentvanguard explain <trace_id>` |
 
 ---
 
