@@ -71,6 +71,10 @@ plain-language walkthrough of what it does and how to use it.
 
    Extras can be combined, e.g. `pip install -e ".[server,metrics,otel,redis,dev]"`.
 
+   Prefer plain `pip install -r requirements.txt`? A `requirements.txt`
+   covering all of the above (core + every extra) is included at the repo
+   root.
+
 5. **Verify the installation**:
 
    ```bash

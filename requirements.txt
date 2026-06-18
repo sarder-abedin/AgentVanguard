@@ -1,0 +1,36 @@
+# Prerequisites for agentvanguard.
+#
+# Mirrors the dependency groups declared in pyproject.toml. The canonical
+# way to install this project is `pip install -e ".[server,dev,otel,metrics,redis]"`;
+# this file is provided for environments that prefer `pip install -r requirements.txt`.
+
+# --- core (always required) ---
+pydantic>=2.6
+pyyaml>=6.0
+jsonschema>=4.21
+typer>=0.12
+rich>=13.7
+
+# --- server extra: HTTP sidecar (`agentvanguard serve`) ---
+fastapi
+starlette
+uvicorn[standard]
+httpx
+
+# --- otel extra: OpenTelemetry tracing ---
+opentelemetry-api
+opentelemetry-sdk
+
+# --- metrics extra: Prometheus /metrics endpoint ---
+prometheus-client
+
+# --- redis extra: shared session store across replicas ---
+redis
+
+# --- dev extra: tests, lint, type-checking ---
+pytest
+pytest-cov
+ruff
+mypy
+types-pyyaml
+types-jsonschema
