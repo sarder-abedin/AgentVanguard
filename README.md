@@ -15,6 +15,27 @@ model, core components, and the principles that make it applicable to any workfl
 New to AgentVanguard? Start with [TUTORIAL.md](TUTORIAL.md) for a
 plain-language walkthrough of what it does and how to use it.
 
+### What, why, how
+
+- **What**: a gatekeeper that checks three moments in an agent's life — the
+  **input** it receives (user messages, retrieved documents, tool results),
+  the **actions** it tries to take (tool/function calls), and the **output**
+  it produces — and returns `ALLOW` / `ALLOW_WITH_MODIFICATIONS` (e.g.
+  redacted) / `REQUIRE_USER_CONFIRMATION` / `DENY` for each one.
+- **Why**: agents can be manipulated by anything they read (hidden
+  instructions in a webpage, document, or tool result), and once they can
+  take actions, a successful manipulation becomes a real consequence — a sent
+  email, a deleted file, a leaked secret, an SSRF request, a runaway loop —
+  not just a bad reply. AgentVanguard enforces hard policy limits that hold
+  even if the agent itself is fully fooled.
+- **How**: declare your tools and their risk in a policy file, wrap each tool
+  function with `@firewall.tool(...)` / `wrap_tool(...)` so every call is
+  checked automatically, and call `firewall.authorize(...)` /
+  `firewall.check_output(...)` at the points where messages enter/leave your
+  loop. No changes to your agent's reasoning, framework, or LLM provider —
+  see [Quick start](#quick-start) below and
+  [TUTORIAL.md](TUTORIAL.md#1-what-is-agentvanguard) for the full walkthrough.
+
 ## Installation
 
 1. **Clone the repository** (skip if you already have it locally):

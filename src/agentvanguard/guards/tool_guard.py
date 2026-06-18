@@ -239,7 +239,7 @@ def _looks_like_url(value: str) -> bool:
     return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value))
 
 
-def _extract_host(value: str) -> str | None:
+def _extract_host(value: str, key_hint: bool = False) -> str | None:
     if _looks_like_url(value):
         return urlparse(value).hostname
     if " " in value or "\t" in value or "\n" in value or "@" in value:
@@ -249,7 +249,7 @@ def _extract_host(value: str) -> str | None:
         return value
     except ValueError:
         pass
-    if "." not in value and value.lower() != "localhost":
+    if "." not in value and value.lower() != "localhost" and not key_hint:
         return None
     return value.split("/")[0].split(":")[0] or None
 
@@ -274,10 +274,11 @@ def _resolve_host_ips(host: str) -> list[str]:
 
 
 def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
-    if not (_URL_KEY_RE.search(key) or _looks_like_url(value)):
+    key_hint = bool(_URL_KEY_RE.search(key))
+    if not (key_hint or _looks_like_url(value)):
         return []
 
-    host = _extract_host(value)
+    host = _extract_host(value, key_hint=key_hint)
     if host is None:
         return []
 
@@ -372,10 +373,11 @@ def _check_egress(
     config: Config,
     workflow_cfg: WorkflowConfig | None,
 ) -> list[Finding]:
-    if manifest.side_effect != SideEffect.EXTERNAL_COMMUNICATION and not _looks_like_url(value):
+    key_hint = bool(_URL_KEY_RE.search(key))
+    if manifest.side_effect != SideEffect.EXTERNAL_COMMUNICATION and not (key_hint or _looks_like_url(value)):
         return []
 
-    host = _extract_host(value)
+    host = _extract_host(value, key_hint=key_hint)
     if host is None:
         return []
 
