@@ -1,9 +1,6 @@
 <p align="center">
   <img src="docs/assets/logo.png" alt="AgentVanguard logo" width="200">
 </p>
-
-# AgentVanguard
-
 A workflow-agnostic firewall for LLM-based agentic systems. AgentVanguard mediates the
 three universal trust boundaries in any agentic workflow — input/context, tool/action
 calls, and output — to defend against prompt injection, excessive agency, data
