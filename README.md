@@ -1,4 +1,4 @@
-# Agent Firewall
+# AgentVanguard
 
 A workflow-agnostic firewall for LLM-based agentic systems. Agent Firewall mediates the
 three universal trust boundaries in any agentic workflow — input/context, tool/action
