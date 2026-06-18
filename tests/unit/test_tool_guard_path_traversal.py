@@ -55,6 +55,30 @@ def test_check_path_traversal_ignores_urls(tmp_path: Path) -> None:
     assert findings == []
 
 
+def test_check_path_traversal_blocks_file_scheme_escape(tmp_path: Path) -> None:
+    """A `file://` URI is a filesystem path, not a network resource -- it
+    must still be checked against the workspace root rather than being
+    exempted alongside http(s) URLs (which SSRF/egress checks cover
+    instead)."""
+
+    config = _config_with_workspace_root(tmp_path)
+
+    findings = tool_guard._check_path_traversal("path", "file:///etc/passwd", READ_FILE_MANIFEST, config)
+
+    assert findings
+    assert all(f.type == FindingType.PATH_TRAVERSAL for f in findings)
+
+
+def test_check_path_traversal_allows_file_scheme_within_workspace(tmp_path: Path) -> None:
+    config = _config_with_workspace_root(tmp_path)
+
+    findings = tool_guard._check_path_traversal(
+        "path", f"file://{tmp_path}/subdir/file.txt", READ_FILE_MANIFEST, config
+    )
+
+    assert findings == []
+
+
 def test_check_path_traversal_ignores_non_path_argument_for_execute(tmp_path: Path) -> None:
     config = _config_with_workspace_root(tmp_path)
 

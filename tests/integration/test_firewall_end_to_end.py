@@ -25,7 +25,9 @@ def _context(session_id: str) -> dict:
     return {"agent": SUPPORT_AGENT, "session_id": session_id}
 
 
-def _build_firewall(tmp_path: Path, **runtime_limit_overrides: object) -> tuple[AgentVanguard, Path]:
+def _build_firewall(
+    tmp_path: Path, rules: list[dict] | None = None, **runtime_limit_overrides: object
+) -> tuple[AgentVanguard, Path]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     audit_path = tmp_path / "logs" / "audit.jsonl"
@@ -79,6 +81,7 @@ def _build_firewall(tmp_path: Path, **runtime_limit_overrides: object) -> tuple[
                 "allowed_tools": ["lookup_order", "send_email", "read_file", "fetch_url"],
             }
         },
+        "rules": rules or [],
     }
 
     config_path = tmp_path / "agentvanguard.yaml"
@@ -215,3 +218,33 @@ def test_audit_log_has_one_redacted_event_per_decision(tmp_path: Path) -> None:
     assert "[REDACTED]" in payload_text
 
     assert tool_call_event["decision"] == "DENY"
+
+
+def test_wrap_agent_blocks_output_requiring_confirmation(tmp_path: Path) -> None:
+    """`SafeAgent._guarded_call`'s output check must treat
+    `REQUIRE_USER_CONFIRMATION` as blocking, the same as every other
+    enforcement point in the SDK (`_enforce`) -- a custom rule escalating an
+    output finding to REQUIRE_USER_CONFIRMATION must not be silently
+    downgraded to a pass-through allow."""
+
+    firewall, _ = _build_firewall(
+        tmp_path,
+        rules=[
+            {
+                "id": "confirm_pii_output",
+                "match": {"finding_types_any": ["pii"]},
+                "action": "REQUIRE_USER_CONFIRMATION",
+            }
+        ],
+    )
+
+    class _MockAgent:
+        def run(self, text: str) -> str:
+            return "Customer SSN on file is 123-45-6789."
+
+    safe_agent = firewall.wrap_agent(_MockAgent())
+
+    with pytest.raises(VanguardBlockedError) as exc_info:
+        safe_agent.run("hello", _context=_context("s-output-confirm"))
+
+    assert exc_info.value.decision.decision == DecisionAction.REQUIRE_USER_CONFIRMATION

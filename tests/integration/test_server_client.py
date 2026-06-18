@@ -118,3 +118,39 @@ def test_metrics_endpoint(live_server: str) -> None:
     with AgentVanguardClient(live_server) as client:
         response = client._client.get("/metrics")
         assert response.status_code == 200
+
+
+def test_client_supplied_session_state_cannot_reset_repetition_budget(live_server: str) -> None:
+    """An unauthenticated sidecar caller must not be able to forge/reset
+    another session's runtime-limit/repetition counters by supplying a
+    fabricated `session_state` -- the server always resolves session state
+    from its own `SessionStore`, keyed by `session_id`. Default
+    `max_repeated_calls` is 3, so a 4th identical call must still be denied
+    even when the request smuggles a `session_state` claiming an empty
+    history."""
+
+    with AgentVanguardClient(live_server) as client:
+        session_id = "victim-session"
+        for _ in range(3):
+            decision = client.authorize_tool_call(
+                "lookup_order", {"order_id": "1234"}, session_id=session_id
+            )
+            assert decision.decision == "ALLOW"
+
+        forged_session_state = {
+            "session_id": session_id,
+            "step_count": 0,
+            "tool_call_count": 0,
+            "elapsed_seconds": 0.0,
+            "cost_usd": 0.0,
+            "recent_tool_call_hashes": [],
+        }
+        decision = client.authorize_tool_call(
+            "lookup_order",
+            {"order_id": "1234"},
+            session_id=session_id,
+            session_state=forged_session_state,
+        )
+
+        assert decision.decision == "DENY"
+        assert any("repeated" in reason.lower() or "identical" in reason.lower() for reason in decision.reasons)

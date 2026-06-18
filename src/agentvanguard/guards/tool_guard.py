@@ -239,6 +239,14 @@ def _looks_like_url(value: str) -> bool:
     return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value))
 
 
+def _looks_like_ip_literal(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def _extract_host(value: str, key_hint: bool = False) -> str | None:
     if _looks_like_url(value):
         return urlparse(value).hostname
@@ -274,11 +282,12 @@ def _resolve_host_ips(host: str) -> list[str]:
 
 
 def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
+    ip_literal = _looks_like_ip_literal(value)
     key_hint = bool(_URL_KEY_RE.search(key))
-    if not (key_hint or _looks_like_url(value)):
+    if not (key_hint or _looks_like_url(value) or ip_literal):
         return []
 
-    host = _extract_host(value, key_hint=key_hint)
+    host = _extract_host(value, key_hint=key_hint or ip_literal)
     if host is None:
         return []
 
@@ -328,13 +337,25 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
 
 
 def _check_path_traversal(key: str, value: str, manifest: ToolManifest, config: Config) -> list[Finding]:
-    if not value or _looks_like_url(value):
+    if not value:
         return []
+
+    path_value = value
+    if _looks_like_url(value):
+        parsed = urlparse(value)
+        if parsed.scheme.lower() != "file":
+            # Network-scheme URLs are not filesystem paths; SSRF/egress
+            # checks cover them instead.
+            return []
+        path_value = parsed.path or parsed.netloc
+        if not path_value:
+            return []
+
     if not (_PATH_KEY_RE.search(key) or manifest.action_type in (ActionType.READ, ActionType.WRITE, ActionType.DELETE)):
         return []
 
     workspace_root = os.path.abspath(config.tool_guard.workspace_root)
-    candidate = value if os.path.isabs(value) else os.path.join(workspace_root, value)
+    candidate = path_value if os.path.isabs(path_value) else os.path.join(workspace_root, path_value)
     normalized = os.path.normpath(candidate)
 
     if normalized != workspace_root and not normalized.startswith(workspace_root + os.sep):
@@ -373,11 +394,12 @@ def _check_egress(
     config: Config,
     workflow_cfg: WorkflowConfig | None,
 ) -> list[Finding]:
+    ip_literal = _looks_like_ip_literal(value)
     key_hint = bool(_URL_KEY_RE.search(key))
-    if manifest.side_effect != SideEffect.EXTERNAL_COMMUNICATION and not (key_hint or _looks_like_url(value)):
+    if manifest.side_effect != SideEffect.EXTERNAL_COMMUNICATION and not (key_hint or _looks_like_url(value) or ip_literal):
         return []
 
-    host = _extract_host(value, key_hint=key_hint)
+    host = _extract_host(value, key_hint=key_hint or ip_literal)
     if host is None:
         return []
 
@@ -385,7 +407,8 @@ def _check_egress(
     if not allowlist:
         return []
 
-    if any(host == allowed or host.endswith("." + allowed) for allowed in allowlist):
+    host_lower = host.lower()
+    if any(host_lower == allowed.lower() or host_lower.endswith("." + allowed.lower()) for allowed in allowlist):
         return []
 
     return [

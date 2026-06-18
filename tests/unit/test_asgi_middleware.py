@@ -32,11 +32,17 @@ async def _ingress_state(request: Request) -> JSONResponse:
     return JSONResponse({"decision": decision.decision.value if decision is not None else None})
 
 
+async def _expand(request: Request) -> PlainTextResponse:
+    await request.body()
+    return PlainTextResponse("this response is longer than five bytes")
+
+
 def _inner_app() -> Starlette:
     return Starlette(
         routes=[
             Route("/echo", _echo, methods=["POST"]),
             Route("/state", _ingress_state, methods=["POST"]),
+            Route("/expand", _expand, methods=["POST"]),
         ]
     )
 
@@ -107,11 +113,22 @@ def test_check_output_disabled_skips_redaction(firewall: AgentVanguard) -> None:
     assert "123-45-6789" in response.text
 
 
-def test_oversized_body_skips_ingress_check(firewall: AgentVanguard) -> None:
+def test_oversized_body_is_denied_fail_closed(firewall: AgentVanguard) -> None:
     app = AgentVanguardMiddleware(_inner_app(), firewall, max_body_bytes=5)
     client = TestClient(app)
 
     response = client.post("/state", content="this body is longer than five bytes")
 
-    assert response.status_code == 200
-    assert response.json()["decision"] is None
+    assert response.status_code == 413
+    assert response.json()["error"] == "blocked_by_agentvanguard"
+
+
+def test_oversized_response_is_denied_fail_closed(tmp_path: Path) -> None:
+    config = Config(audit={"path": str(tmp_path / "logs" / "audit.jsonl")})
+    app = AgentVanguardMiddleware(_inner_app(), AgentVanguard(config), max_body_bytes=5)
+    client = TestClient(app)
+
+    response = client.post("/expand", content="hi")
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "blocked_by_agentvanguard"

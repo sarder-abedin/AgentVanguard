@@ -217,8 +217,7 @@ class SafeAgent:
                 session_id=context.get("session_id"),
             )
         )
-        if output_decision.decision == DecisionAction.DENY:
-            raise VanguardBlockedError(output_decision)
+        _enforce(output_decision)
         if output_decision.redacted_content is not None and isinstance(result, str):
             return output_decision.redacted_content
         return result

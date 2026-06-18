@@ -75,6 +75,18 @@ def test_extract_host_bare_single_label_requires_key_hint() -> None:
     assert tool_guard._extract_host("metadata", key_hint=True) == "metadata"
 
 
+def test_check_ssrf_blocks_bare_ip_literal_under_unrelated_key() -> None:
+    """A bare IP-literal value (e.g. the cloud metadata address) must be
+    checked for SSRF regardless of the argument's key name -- gating purely
+    on `_URL_KEY_RE` would let a tool with a parameter named e.g. "ip" or
+    "target" reach blocked addresses untouched."""
+
+    findings = tool_guard._check_ssrf("target", "169.254.169.254", FETCH_URL_MANIFEST)
+
+    assert findings, "expected SSRF finding for a bare IP literal under a non-host-named key"
+    assert all(f.type == FindingType.SSRF for f in findings)
+
+
 def test_check_ssrf_blocks_bare_single_label_internal_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression test: a bare single-label internal hostname (no dots,
     e.g. "metadata") passed via a host-named argument must still be

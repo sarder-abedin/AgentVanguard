@@ -21,6 +21,7 @@ invariant of agentvanguard.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from agentvanguard.approval import build_approval_provider
@@ -48,6 +49,8 @@ class Engine:
         self.session_store = build_session_store(config)
         self.approval = build_approval_provider(config)
         self.audit = AuditLogger.from_config(config, self.detectors)
+        self._session_locks: dict[str, threading.Lock] = {}
+        self._session_locks_guard = threading.Lock()
 
     def register_tool(self, manifest: ToolManifest) -> None:
         """Register (or overwrite) a `ToolManifest` at runtime — used by
@@ -56,24 +59,47 @@ class Engine:
 
         self.tool_manifests[manifest.name] = manifest
 
+    def _lock_for_session(self, session_id: str) -> threading.Lock:
+        """A dedicated `Lock` per `session_id`, so concurrent `authorize()`
+        calls for *different* sessions never block each other, while calls
+        for the *same* session are serialized end-to-end (resolve -> mutate
+        -> persist) -- closing the read-modify-write race that would
+        otherwise let two concurrent requests for one session both read the
+        same counters and the second `put()` clobber the first's increment,
+        defeating `max_steps`/`max_tool_calls`/`max_repeated_calls`.
+
+        This only serializes calls within this process; a `RedisSessionStore`
+        shared across multiple replicas still needs its own per-replica lock
+        scope, since there is no cross-process coordination here.
+        """
+
+        with self._session_locks_guard:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._session_locks[session_id] = lock
+            return lock
+
     def authorize(self, policy_input: PolicyInput) -> Decision:
         start = time.monotonic()
+        session_key = policy_input.session_id or "default"
 
         with tracing.span("agentvanguard.authorize", action=policy_input.action.value):
-            session_state = self._resolve_session_state(policy_input)
+            with self._lock_for_session(session_key):
+                session_state = self._resolve_session_state(policy_input)
 
-            verdicts = self.evaluator.evaluate(policy_input, self.detectors, self.tool_manifests, session_state)
-            decision = aggregate(verdicts)
+                verdicts = self.evaluator.evaluate(policy_input, self.detectors, self.tool_manifests, session_state)
+                decision = aggregate(verdicts)
 
-            if decision.decision == DecisionAction.REQUIRE_USER_CONFIRMATION:
-                if self.approval.request_approval(decision, policy_input):
-                    downgraded = (
-                        DecisionAction.ALLOW_WITH_MODIFICATIONS if decision.redactions else DecisionAction.ALLOW
-                    )
-                    decision = decision.model_copy(update={"decision": downgraded})
+                if decision.decision == DecisionAction.REQUIRE_USER_CONFIRMATION:
+                    if self.approval.request_approval(decision, policy_input):
+                        downgraded = (
+                            DecisionAction.ALLOW_WITH_MODIFICATIONS if decision.redactions else DecisionAction.ALLOW
+                        )
+                        decision = decision.model_copy(update={"decision": downgraded})
 
-            self._update_session_state(session_state, policy_input, decision)
-            self.audit.log(policy_input, decision, verdicts)
+                self._update_session_state(session_state, policy_input, decision)
+                self.audit.log(policy_input, decision, verdicts)
 
         metrics.record_decision(policy_input.action.value, decision.decision.value, time.monotonic() - start)
         return decision

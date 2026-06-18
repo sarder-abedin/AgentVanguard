@@ -14,10 +14,14 @@ For each HTTP request/response cycle:
    `ALLOW_WITH_MODIFICATIONS` rewrites the body (and `Content-Length`) to the
    redacted text.
 
-Both checks are best-effort and skip oversized or non-UTF-8 bodies. Because
-the whole response body is buffered before any of it is sent downstream,
-this middleware is **not** suitable for streaming responses (e.g. SSE) --
-use the sidecar (`/v1/check-output`) for those instead.
+Bodies that exceed `max_body_bytes` are **not** silently passed through
+unmediated -- fail-closed applies here too, so an oversized body is rejected
+(`413` on ingress, `502` on output) rather than skipping inspection. Non-UTF-8
+bodies (binary payloads) are not text-inspectable and pass through unchecked,
+since the detectors only operate on text. Because the whole response body is
+buffered before any of it is sent downstream, this middleware is **not**
+suitable for streaming responses (e.g. SSE) -- use the sidecar
+(`/v1/check-output`) for those instead.
 
     from agentvanguard import AgentVanguard
     from agentvanguard.integrations.asgi import AgentVanguardMiddleware
@@ -72,7 +76,10 @@ class AgentVanguardMiddleware:
 
         body, body_messages, truncated = await _read_body(receive, self.max_body_bytes)
 
-        if self.check_ingress and body and not truncated:
+        if self.check_ingress and body:
+            if truncated:
+                await _send_json(send, 413, _oversized_payload("request"))
+                return
             text = _decode(body)
             if text is not None:
                 decision = self.firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=text))
@@ -113,7 +120,10 @@ class AgentVanguardMiddleware:
         headers: list[tuple[bytes, bytes]] = list(start_message.get("headers", []))
         response_body: bytes = buffered.get("body", b"")
 
-        if 200 <= status < 300 and response_body and len(response_body) <= self.max_body_bytes:
+        if 200 <= status < 300 and response_body:
+            if len(response_body) > self.max_body_bytes:
+                await _send_json(send, 502, _oversized_payload("response"))
+                return
             text = _decode(response_body)
             if text is not None:
                 decision = self.firewall.authorize(
@@ -160,6 +170,15 @@ def _blocked_payload(decision: Decision) -> dict[str, Any]:
         "decision": decision.decision.value,
         "reasons": decision.reasons,
         "trace_id": decision.trace_id,
+    }
+
+
+def _oversized_payload(side: str) -> dict[str, Any]:
+    return {
+        "error": "blocked_by_agentvanguard",
+        "decision": DecisionAction.DENY.value,
+        "reasons": [f"{side} body exceeds max_body_bytes and cannot be inspected (fail-closed)"],
+        "trace_id": None,
     }
 
 
