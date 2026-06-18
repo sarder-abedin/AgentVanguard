@@ -1,7 +1,7 @@
-"""End-to-end integration tests: `AgentFirewall` -> `Engine` -> guards ->
+"""End-to-end integration tests: `AgentVanguard` -> `Engine` -> guards ->
 audit, driven through `wrap_tool`/`@firewall.tool` and `authorize` directly.
 
-Each test builds its own `AgentFirewall` from a config written to `tmp_path`
+Each test builds its own `AgentVanguard` from a config written to `tmp_path`
 so audit logs and session state never leak between tests.
 """
 
@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_firewall import ActionType, AgentFirewall, AgentIdentity, RiskTier, SideEffect, ToolManifest
-from agent_firewall.core.enums import ActionKind, DecisionAction
-from agent_firewall.core.errors import FirewallBlockedError
-from agent_firewall.core.models import PolicyInput
+from agentvanguard import ActionType, AgentVanguard, AgentIdentity, RiskTier, SideEffect, ToolManifest
+from agentvanguard.core.enums import ActionKind, DecisionAction
+from agentvanguard.core.errors import VanguardBlockedError
+from agentvanguard.core.models import PolicyInput
 
 SUPPORT_AGENT = AgentIdentity(name="support_agent", workflow="customer_support")
 
@@ -25,7 +25,7 @@ def _context(session_id: str) -> dict:
     return {"agent": SUPPORT_AGENT, "session_id": session_id}
 
 
-def _build_firewall(tmp_path: Path, **runtime_limit_overrides: object) -> tuple[AgentFirewall, Path]:
+def _build_firewall(tmp_path: Path, **runtime_limit_overrides: object) -> tuple[AgentVanguard, Path]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     audit_path = tmp_path / "logs" / "audit.jsonl"
@@ -81,10 +81,10 @@ def _build_firewall(tmp_path: Path, **runtime_limit_overrides: object) -> tuple[
         },
     }
 
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(yaml.safe_dump(config))
 
-    return AgentFirewall.from_config(str(config_path)), audit_path
+    return AgentVanguard.from_config(str(config_path)), audit_path
 
 
 def test_unknown_tool_is_denied(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_high_risk_tool_requires_approval_is_blocked(tmp_path: Path) -> None:
 
     send_email = firewall.wrap_tool("send_email", _send_email)
 
-    with pytest.raises(FirewallBlockedError) as exc_info:
+    with pytest.raises(VanguardBlockedError) as exc_info:
         send_email(to="alice@company.com", body="hi", _context=_context("s-approval"))
 
     decision = exc_info.value.decision
@@ -125,7 +125,7 @@ def test_ssrf_argument_is_denied(tmp_path: Path) -> None:
 
     fetch_url = firewall.wrap_tool("fetch_url", _fetch_url)
 
-    with pytest.raises(FirewallBlockedError) as exc_info:
+    with pytest.raises(VanguardBlockedError) as exc_info:
         fetch_url(url="http://169.254.169.254/latest/meta-data/", _context=_context("s-ssrf"))
 
     assert exc_info.value.decision.decision == DecisionAction.DENY
@@ -139,7 +139,7 @@ def test_path_traversal_argument_is_denied(tmp_path: Path) -> None:
 
     read_file = firewall.wrap_tool("read_file", _read_file)
 
-    with pytest.raises(FirewallBlockedError) as exc_info:
+    with pytest.raises(VanguardBlockedError) as exc_info:
         read_file(path="../../etc/passwd", _context=_context("s-path"))
 
     assert exc_info.value.decision.decision == DecisionAction.DENY
@@ -178,7 +178,7 @@ def test_repeated_identical_tool_call_denied_after_limit(tmp_path: Path) -> None
     assert lookup_order(order_id="1234", _context=ctx) == "Order 1234: status=delivered"
     assert lookup_order(order_id="1234", _context=ctx) == "Order 1234: status=delivered"
 
-    with pytest.raises(FirewallBlockedError) as exc_info:
+    with pytest.raises(VanguardBlockedError) as exc_info:
         lookup_order(order_id="1234", _context=ctx)
 
     decision = exc_info.value.decision

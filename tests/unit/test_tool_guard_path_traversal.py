@@ -1,15 +1,15 @@
-"""Unit tests for path-traversal protection in `agent_firewall.guards.tool_guard`."""
+"""Unit tests for path-traversal protection in `agentvanguard.guards.tool_guard`."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from agent_firewall.config.loader import load
-from agent_firewall.config.schema import Config
-from agent_firewall.core.enums import ActionKind, ActionType, DecisionAction, FindingType
-from agent_firewall.core.models import PolicyInput, ToolManifest
-from agent_firewall.detectors.registry import DetectorRegistry
-from agent_firewall.guards import tool_guard
+from agentvanguard.config.loader import load
+from agentvanguard.config.schema import Config
+from agentvanguard.core.enums import ActionKind, ActionType, DecisionAction, FindingType
+from agentvanguard.core.models import PolicyInput, ToolManifest
+from agentvanguard.detectors.registry import DetectorRegistry
+from agentvanguard.guards import tool_guard
 
 READ_FILE_MANIFEST = ToolManifest(name="read_file", action_type=ActionType.READ)
 EXECUTE_MANIFEST = ToolManifest(name="run_command", action_type=ActionType.EXECUTE)
@@ -76,7 +76,7 @@ def test_tool_call_with_path_traversal_argument_is_denied(tmp_path: Path) -> Non
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(
         f"""
 tool_guard:
@@ -108,7 +108,7 @@ def test_tool_call_with_path_within_workspace_is_allowed(tmp_path: Path) -> None
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(
         f"""
 tool_guard:

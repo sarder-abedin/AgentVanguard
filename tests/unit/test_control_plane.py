@@ -1,4 +1,4 @@
-"""Unit tests for `agent_firewall.control_plane.sources` --
+"""Unit tests for `agentvanguard.control_plane.sources` --
 `LocalFileSource` and `HttpPolicyBundleSource` (mocked HTTP)."""
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_firewall.config.defaults import get_default_config
-from agent_firewall.config.schema import Config
-from agent_firewall.control_plane import HttpPolicyBundleSource, LocalFileSource
-from agent_firewall.core.errors import ConfigError
+from agentvanguard.config.defaults import get_default_config
+from agentvanguard.config.schema import Config
+from agentvanguard.control_plane import HttpPolicyBundleSource, LocalFileSource
+from agentvanguard.core.errors import ConfigError
 
 
 class _FakeResponse:
@@ -37,11 +37,11 @@ def _patch_urlopen(response: _FakeResponse | Exception) -> Any:
             raise response
         return response
 
-    return patch("agent_firewall.control_plane.sources.urllib.request.urlopen", side_effect=_urlopen)
+    return patch("agentvanguard.control_plane.sources.urllib.request.urlopen", side_effect=_urlopen)
 
 
 def test_local_file_source_fetch(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text("firewall:\n  fail_closed: false\n")
 
     config = LocalFileSource(str(config_path)).fetch()

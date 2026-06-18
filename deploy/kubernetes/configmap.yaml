@@ -1,16 +1,16 @@
-# Default agent-firewall config for the sidecar deployment. Customize this
+# Default agentvanguard config for the sidecar deployment. Customize this
 # (or replace it entirely) for your environment, then re-apply:
 #
 #   kubectl apply -f configmap.yaml
-#   kubectl rollout restart deployment/agent-firewall
+#   kubectl rollout restart deployment/agentvanguard
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agent-firewall-config
+  name: agentvanguard-config
   labels:
-    app: agent-firewall
+    app: agentvanguard
 data:
-  agent_firewall.yaml: |
+  agentvanguard.yaml: |
     firewall:
       fail_closed: true
       default_workflow_mode: restrictive
@@ -19,7 +19,7 @@ data:
 
     audit:
       backend: jsonl
-      path: /app/logs/agent_firewall_audit.jsonl
+      path: /app/logs/agentvanguard_audit.jsonl
       redact_secrets: true
 
     runtime_limits:

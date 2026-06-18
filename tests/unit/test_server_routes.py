@@ -1,4 +1,4 @@
-"""Unit tests for `agent_firewall.server` routes via FastAPI's `TestClient`.
+"""Unit tests for `agentvanguard.server` routes via FastAPI's `TestClient`.
 
 Every route builds a `PolicyInput` and calls the same `Engine.authorize()`
 exercised by `tests/unit/test_policy_evaluator.py` and
@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_firewall.config.schema import Config
-from agent_firewall.server.app import create_app
+from agentvanguard.config.schema import Config
+from agentvanguard.server.app import create_app
 
 
 @pytest.fixture()

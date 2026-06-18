@@ -1,4 +1,4 @@
-"""Unit tests for `agent_firewall.config.loader` and `config.schema`."""
+"""Unit tests for `agentvanguard.config.loader` and `config.schema`."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_firewall.config.defaults import DEFAULT_CONFIG_YAML, get_default_config
-from agent_firewall.config.loader import CONFIG_ENV_VAR, load, resolve_config_path
-from agent_firewall.core.enums import ActionType, RiskTier
-from agent_firewall.core.errors import ConfigError
+from agentvanguard.config.defaults import DEFAULT_CONFIG_YAML, get_default_config
+from agentvanguard.config.loader import CONFIG_ENV_VAR, load, resolve_config_path
+from agentvanguard.core.enums import ActionType, RiskTier
+from agentvanguard.core.errors import ConfigError
 
 
 def test_get_default_config_is_valid_and_fail_closed() -> None:
@@ -33,7 +33,7 @@ def test_load_with_no_path_and_no_file_falls_back_to_defaults(tmp_path: Path, mo
 
 
 def test_load_explicit_path(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(DEFAULT_CONFIG_YAML)
 
     config = load(str(config_path))
@@ -51,7 +51,7 @@ def test_load_explicit_path_missing_file_raises_config_error(tmp_path: Path) -> 
 
 
 def test_load_invalid_yaml_raises_config_error(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text("firewall: [this, is, not, a, mapping]\n")
 
     with pytest.raises(ConfigError):
@@ -59,7 +59,7 @@ def test_load_invalid_yaml_raises_config_error(tmp_path: Path) -> None:
 
 
 def test_load_validates_cross_references(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(
         """
 tools:
@@ -99,7 +99,7 @@ def test_resolve_config_path_explicit_arg_wins_over_env(tmp_path: Path, monkeypa
 
 
 def test_tool_manifests_built_from_config(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(DEFAULT_CONFIG_YAML)
     config = load(str(config_path))
 

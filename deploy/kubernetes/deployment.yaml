@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent-firewall
+  name: agentvanguard
   labels:
-    app: agent-firewall
+    app: agentvanguard
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: agent-firewall
+      app: agentvanguard
   template:
     metadata:
       labels:
-        app: agent-firewall
+        app: agentvanguard
     spec:
       securityContext:
         runAsNonRoot: true
@@ -20,15 +20,15 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
       containers:
-        - name: agent-firewall
-          image: agent-firewall:latest
+        - name: agentvanguard
+          image: agentvanguard:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
           env:
-            - name: AGENT_FIREWALL_CONFIG
-              value: /app/config/agent_firewall.yaml
+            - name: AGENTVANGUARD_CONFIG
+              value: /app/config/agentvanguard.yaml
           readinessProbe:
             httpGet:
               path: /readyz
@@ -62,6 +62,6 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agent-firewall-config
+            name: agentvanguard-config
         - name: logs
           emptyDir: {}

@@ -1,14 +1,14 @@
 services:
-  agent-firewall:
+  agentvanguard:
     build: .
-    image: agent-firewall:latest
+    image: agentvanguard:latest
     ports:
       - "8080:8080"
     volumes:
-      - ./agent_firewall.yaml:/app/agent_firewall.yaml:ro
+      - ./agentvanguard.yaml:/app/agentvanguard.yaml:ro
       - ./logs:/app/logs
     environment:
-      - AGENT_FIREWALL_CONFIG=/app/agent_firewall.yaml
+      - AGENTVANGUARD_CONFIG=/app/agentvanguard.yaml
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
       interval: 30s

@@ -1,5 +1,5 @@
 """Tool-broker quick-start: `@firewall.tool`, `wrap_tool`, and the
-`FirewallBlockedError` flow.
+`VanguardBlockedError` flow.
 
 Run from the repo root:
 
@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_firewall import ActionType, AgentFirewall, AgentIdentity, RiskTier, SideEffect, ToolManifest
-from agent_firewall.core.errors import FirewallBlockedError
+from agentvanguard import ActionType, AgentVanguard, AgentIdentity, RiskTier, SideEffect, ToolManifest
+from agentvanguard.core.errors import VanguardBlockedError
 
-CONFIG_PATH = str(Path(__file__).parent / "agent_firewall.yaml")
+CONFIG_PATH = str(Path(__file__).parent / "agentvanguard.yaml")
 
-firewall = AgentFirewall.from_config(CONFIG_PATH)
+firewall = AgentVanguard.from_config(CONFIG_PATH)
 
 SUPPORT_AGENT = AgentIdentity(name="support_agent", workflow="customer_support")
 CONTEXT = {"agent": SUPPORT_AGENT, "session_id": "tool-broker-demo"}
@@ -34,7 +34,7 @@ def lookup_order(order_id: str) -> str:
     return f"Order {order_id} shipped to alice@example.com, status: delivered."
 
 
-# `send_email` is already declared under `tools:` in agent_firewall.yaml
+# `send_email` is already declared under `tools:` in agentvanguard.yaml
 # (risk_tier: high, requires_approval: true) -- look it up by name instead of
 # redeclaring its manifest.
 def _send_email(to: str, body: str) -> str:
@@ -51,10 +51,10 @@ def main() -> None:
 
     # send_email requires approval, and the default
     # `firewall.approval_provider: auto_deny` never grants it, so
-    # REQUIRE_USER_CONFIRMATION resolves to DENY -> FirewallBlockedError.
+    # REQUIRE_USER_CONFIRMATION resolves to DENY -> VanguardBlockedError.
     try:
         send_email(to="alice@example.com", body="Your refund has been processed.", _context=CONTEXT)
-    except FirewallBlockedError as exc:
+    except VanguardBlockedError as exc:
         print("send_email blocked:", exc)
 
 

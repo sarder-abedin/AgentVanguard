@@ -1,5 +1,5 @@
-"""Unit tests for `agent_firewall.session.redis_store.RedisSessionStore` and
-`agent_firewall.session.factory.build_session_store`, using `fakeredis` in
+"""Unit tests for `agentvanguard.session.redis_store.RedisSessionStore` and
+`agentvanguard.session.factory.build_session_store`, using `fakeredis` in
 place of a real Redis server."""
 
 from __future__ import annotations
@@ -10,12 +10,12 @@ from unittest.mock import patch
 import fakeredis
 import pytest
 
-from agent_firewall.config.schema import Config
-from agent_firewall.core.errors import ConfigError
-from agent_firewall.core.models import SessionState
-from agent_firewall.session.factory import build_session_store
-from agent_firewall.session.redis_store import RedisSessionStore
-from agent_firewall.session.store import InMemorySessionStore
+from agentvanguard.config.schema import Config
+from agentvanguard.core.errors import ConfigError
+from agentvanguard.core.models import SessionState
+from agentvanguard.session.factory import build_session_store
+from agentvanguard.session.redis_store import RedisSessionStore
+from agentvanguard.session.store import InMemorySessionStore
 
 
 @pytest.fixture()

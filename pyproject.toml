@@ -3,12 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-firewall"
+name = "agentvanguard"
 version = "0.1.0"
 description = "A workflow-agnostic firewall for LLM-based agentic systems"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = { text = "PolyForm-Noncommercial-1.0.0" }
 dependencies = [
     "pydantic>=2.6",
     "pyyaml>=6.0",
@@ -26,10 +26,10 @@ metrics = ["prometheus-client"]
 redis = ["redis"]
 
 [project.scripts]
-agent-firewall = "agent_firewall.cli.main:app"
+agentvanguard = "agentvanguard.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_firewall"]
+packages = ["src/agentvanguard"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

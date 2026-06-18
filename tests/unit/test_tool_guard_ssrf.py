@@ -1,4 +1,4 @@
-"""Unit tests for SSRF protection in `agent_firewall.guards.tool_guard`."""
+"""Unit tests for SSRF protection in `agentvanguard.guards.tool_guard`."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_firewall.config.loader import load
-from agent_firewall.core.enums import ActionKind, ActionType, DecisionAction, FindingType
-from agent_firewall.core.models import PolicyInput, ToolManifest
-from agent_firewall.detectors.registry import DetectorRegistry
-from agent_firewall.guards import tool_guard
+from agentvanguard.config.loader import load
+from agentvanguard.core.enums import ActionKind, ActionType, DecisionAction, FindingType
+from agentvanguard.core.models import PolicyInput, ToolManifest
+from agentvanguard.detectors.registry import DetectorRegistry
+from agentvanguard.guards import tool_guard
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "payloads"
 
@@ -89,7 +89,7 @@ def test_check_ssrf_dns_resolution_failure_is_allowed(monkeypatch: pytest.Monkey
 
 
 def test_tool_call_with_ssrf_argument_is_denied(tmp_path: Path) -> None:
-    config_path = tmp_path / "agent_firewall.yaml"
+    config_path = tmp_path / "agentvanguard.yaml"
     config_path.write_text(
         """
 tools:

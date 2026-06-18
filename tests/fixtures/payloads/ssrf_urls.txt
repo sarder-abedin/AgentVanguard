@@ -2,7 +2,7 @@
 # are comments and should be skipped by tests.
 #
 # Each line is expected to be rejected by
-# agent_firewall.guards.tool_guard._check_ssrf (FindingType.SSRF) when passed
+# agentvanguard.guards.tool_guard._check_ssrf (FindingType.SSRF) when passed
 # as a URL-shaped tool argument.
 
 # Cloud metadata endpoints
