@@ -3,6 +3,12 @@
 Commands: `init`, `quickstart`, `validate-config`, `scan`, `check-ingress`,
 `explain`, `doctor`, `serve`, `version`. `serve` requires the `[server]`
 extra.
+
+Every command below is a thin wrapper: it parses CLI flags, calls into the
+SDK (`config/loader.load`, `AgentVanguard`, `DetectorRegistry`, etc.) the
+same way any other integration surface would, and renders the result with
+`rich`. No command re-implements policy/config logic itself -- that would
+violate the project's "single shared `Engine`" invariant.
 """
 
 from __future__ import annotations
@@ -28,11 +34,17 @@ from agentvanguard.firewall import AgentVanguard
 from agentvanguard.observability.logging import configure_logging
 from agentvanguard.version import __version__
 
+# The root typer app; `no_args_is_help=True` means running `agentvanguard`
+# with no subcommand prints help instead of doing nothing. This object is
+# the `agentvanguard` console-script entry point (see `pyproject.toml`'s
+# `[project.scripts]`).
 app = typer.Typer(
     name="agentvanguard",
     help="A workflow-agnostic firewall for LLM-based agentic systems.",
     no_args_is_help=True,
 )
+# Shared `rich` console used by every command below for colorized output
+# (e.g. `[red]...[/red]` for errors, `[green]...[/green]` for success).
 console = Console()
 
 
@@ -45,10 +57,15 @@ def init(
 ) -> None:
     """Write an annotated default `agentvanguard.yaml`."""
 
+    # Fail closed by default: never silently clobber an existing config
+    # file unless the caller explicitly opts in with `--force`.
     if output.exists() and not force:
         console.print(f"[red]{output} already exists. Use --force to overwrite.[/red]")
         raise typer.Exit(code=1)
 
+    # `DEFAULT_CONFIG_YAML` (from config/defaults.py) is a static, annotated
+    # YAML template -- not derived from `Config()` -- so it can carry inline
+    # comments explaining each section to a first-time user.
     output.write_text(DEFAULT_CONFIG_YAML)
     console.print(f"[green]Wrote {output}[/green]")
 
@@ -65,17 +82,31 @@ _ACTION_TYPE_DEFAULTS: dict[ActionType, tuple[SideEffect, RiskTier, bool, bool]]
     ActionType.FINANCIAL: (SideEffect.FINANCIAL_TRANSACTION, RiskTier.CRITICAL, True, False),
 }
 
+# Fallback tool set offered by `_prompt_tools()` when the user asks for
+# zero custom tools -- gives `quickstart` a non-empty, schema-valid `tools:`
+# section to write out and lets the user see one `read` and one
+# `send_external` example to edit later instead of starting from nothing.
 _QUICKSTART_DEFAULT_TOOLS: dict[str, ActionType] = {
     "lookup_order": ActionType.READ,
     "send_email": ActionType.SEND_EXTERNAL,
 }
 
+# Tighter-than-default `RuntimeLimits` offered by `quickstart` when the user
+# opts into "conservative" mode -- lower step/call/time/cost/repeat caps so
+# a first, unfamiliar run fails closed quickly rather than racking up many
+# tool calls or cost before a problem is noticed.
 _CONSERVATIVE_RUNTIME_LIMITS = RuntimeLimits(
     max_steps=8, max_tool_calls=5, max_runtime_seconds=30, max_cost_usd=1.00, max_repeated_calls=2
 )
 
 
 def _tool_config_for(action_type: ActionType) -> ToolConfig:
+    """Build a safe-by-default `ToolConfig` for `action_type`, using the
+    `(side_effect, risk_tier, requires_approval, reversible)` tuple looked
+    up from `_ACTION_TYPE_DEFAULTS`. Used by `quickstart` to turn the user's
+    one-word answer (e.g. "read", "send_external") into a fully-formed,
+    schema-valid tool entry without making them learn the risk model."""
+
     side_effect, risk_tier, requires_approval, reversible = _ACTION_TYPE_DEFAULTS[action_type]
     return ToolConfig(
         action_type=action_type,
@@ -87,6 +118,12 @@ def _tool_config_for(action_type: ActionType) -> ToolConfig:
 
 
 def _prompt_modes() -> set[str]:
+    """Interactively ask the `quickstart` user which integration surface(s)
+    they plan to use (in-process SDK, ASGI middleware, or HTTP sidecar) so
+    `_print_next_steps()` can later print only the relevant instructions.
+    Multiple modes may be selected; if none are, defaults to `"sdk"` so the
+    wizard always has at least one mode to act on."""
+
     console.print("\n[bold]How will your agent(s) use AgentVanguard?[/bold] (you can pick more than one)")
     modes = set()
     if typer.confirm("  Call it directly as a Python SDK / tool-broker (in-process)?", default=True):
@@ -102,6 +139,18 @@ def _prompt_modes() -> set[str]:
 
 
 def _prompt_tools() -> dict[str, ActionType]:
+    """Interactively collect the tool names and `ActionType`s the
+    `quickstart` user wants to register, returning a `{name: ActionType}`
+    mapping that `_build_quickstart_config` turns into `ToolConfig`s.
+
+    Asking "how many tools" up front (rather than looping until the user
+    types a sentinel) keeps the prompt flow simple; entering `0` short-
+    circuits to `_QUICKSTART_DEFAULT_TOOLS` so there's still something to
+    write out and edit. An unrecognized action-type string is reported and
+    downgraded to `ActionType.READ` (the least-privileged choice) rather
+    than aborting the wizard.
+    """
+
     console.print(
         "\n[bold]Tools[/bold] -- every tool your agent can call must be declared, or it is DENY'd by default."
     )
@@ -133,6 +182,13 @@ def _build_quickstart_config(
     approval_provider: Literal["auto_deny", "cli_prompt"],
     conservative: bool,
 ) -> Config:
+    """Assemble the final `Config` for `quickstart` from the answers
+    gathered by `_prompt_tools()` and the approval-provider/conservative-
+    limits choices made in the `quickstart` command body. Each `tools`
+    entry is converted to a `ToolConfig` via `_tool_config_for`; runtime
+    limits are `_CONSERVATIVE_RUNTIME_LIMITS` or the schema defaults
+    depending on `conservative`."""
+
     return Config(
         firewall=FirewallSection(approval_provider=approval_provider),
         runtime_limits=_CONSERVATIVE_RUNTIME_LIMITS if conservative else RuntimeLimits(),
@@ -141,6 +197,11 @@ def _build_quickstart_config(
 
 
 def _print_next_steps(modes: set[str], config_path: Path) -> None:
+    """Print copy-pasteable usage snippets for each integration mode the
+    `quickstart` user selected in `_prompt_modes()` (SDK/tool-broker, ASGI
+    middleware, HTTP sidecar), referencing the just-written `config_path`,
+    plus a closing pointer to `agentvanguard doctor` to verify the setup."""
+
     console.print("\n[bold]Next steps[/bold]")
 
     if "sdk" in modes:
@@ -181,12 +242,16 @@ def quickstart(
     integration mode(s) you picked. Does not remove or replace `init` --
     use whichever is faster for you."""
 
+    # Same overwrite-protection as `init`: never clobber an existing file
+    # without `--force`.
     if output.exists() and not force:
         console.print(f"[red]{output} already exists. Use --force to overwrite.[/red]")
         raise typer.Exit(code=1)
 
     console.print("[bold]AgentVanguard quickstart[/bold]")
 
+    # Gather the wizard's three inputs: which surface(s) to integrate with,
+    # which tools to declare, and the approval/runtime-limit posture.
     modes = _prompt_modes()
     tools = _prompt_tools()
 
@@ -204,6 +269,10 @@ def quickstart(
         default=True,
     )
 
+    # Build the `Config` from the collected answers, then re-run the same
+    # cross-reference validation `validate-config`/`load()` would run --
+    # catches e.g. a workflow referencing a tool that was never declared --
+    # before anything is written to disk.
     config = _build_quickstart_config(tools, approval_provider, conservative)
     errors = config.validate_references()
     if errors:
@@ -212,6 +281,11 @@ def quickstart(
             console.print(f"  - {error}")
         raise typer.Exit(code=1)
 
+    # Unlike `init` (which writes a static annotated template), `quickstart`
+    # serializes the actual constructed `Config` object via pydantic's
+    # `model_dump` -- so the file on disk exactly reflects the wizard's
+    # answers, at the cost of losing the explanatory inline comments
+    # `DEFAULT_CONFIG_YAML` has.
     output.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False))
     console.print(f"\n[green]Wrote {output}[/green]")
     _print_next_steps(modes, output)
@@ -223,12 +297,19 @@ def validate_config(
 ) -> None:
     """Load and validate a config file (including cross-references)."""
 
+    # `load()` does the full pipeline: resolve the path, parse YAML,
+    # validate against the pydantic `Config` schema, and run
+    # `Config.validate_references()` for cross-section checks (e.g. a
+    # workflow's `allowed_tools` referencing an undeclared tool). Any
+    # failure surfaces as `ConfigError` with a human-readable message.
     try:
         cfg = load(config)
     except ConfigError as exc:
         console.print(f"[red]Invalid config:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
+    # On success, print a quick summary so the user can sanity-check that
+    # the expected number of tools/workflows/rules were picked up.
     console.print("[green]Config is valid.[/green]")
     console.print(f"  tools: {len(cfg.tools)}")
     console.print(f"  workflows: {len(cfg.workflows)}")
@@ -245,6 +326,11 @@ def scan(
 ) -> None:
     """Run the configured detectors over `--text` and print `Finding[]` as JSON."""
 
+    # This is a detector-only smoke test: it runs the same `DetectorRegistry`
+    # the engine uses, but does *not* go through `Engine.authorize()` --
+    # there's no `Decision`, no session-state mutation, no audit log entry.
+    # Useful for quickly checking "does my prompt-injection/PII/secret regex
+    # fire on this string?" without standing up a full `PolicyInput`.
     try:
         cfg = load(config)
     except ConfigError as exc:
@@ -252,6 +338,9 @@ def scan(
         raise typer.Exit(code=1) from exc
 
     detectors = DetectorRegistry.from_config(cfg)
+    # `provenance` affects risk scoring inside each detector (e.g. the same
+    # text may be scored differently if it's user input vs. a tool output),
+    # so it's exposed as a flag rather than hardcoded.
     findings = detectors.detect_all(text, provenance)
     console.print_json(data=[f.model_dump(mode="json") for f in findings])
 
@@ -264,6 +353,13 @@ def check_ingress(
 ) -> None:
     """Build a minimal `action=ingress` `PolicyInput` and print the `Decision`."""
 
+    # Unlike `scan`, this command goes through the real `AgentVanguard` SDK
+    # entry point -> `Engine.authorize()` -> full ingress guard pipeline
+    # (detectors, risk aggregation, approval, session-state update, audit
+    # logging) -- the same path a real ingress request would take. Useful
+    # for testing "what would my firewall actually decide for this input?"
+    # from the command line, including session-scoped runtime-limit
+    # tracking if `--session-id` is given.
     try:
         firewall = AgentVanguard.from_config(config)
     except ConfigError as exc:
@@ -276,6 +372,9 @@ def check_ingress(
     console.print_json(data=decision.model_dump(mode="json"))
 
 
+# Color lookup tables shared by `_print_audit_event` for rendering
+# severities and decisions consistently with the rest of the CLI's
+# `rich`-based output (e.g. red for DENY/critical, green for ALLOW/low).
 _SEVERITY_COLOR = {"low": "green", "medium": "yellow", "high": "red", "critical": "bold red"}
 _DECISION_COLOR = {
     "ALLOW": "green",
@@ -286,6 +385,16 @@ _DECISION_COLOR = {
 
 
 def _print_audit_event(event: dict) -> None:
+    """Render one parsed audit-log JSON object (as produced by
+    `AuditLogger`/the `jsonl` sink) as human-readable, colorized text for
+    `explain`: timestamp/action/session header, decision + risk score,
+    each `Finding` that contributed to the decision, and the `Decision`'s
+    `reasons`. `event` is treated as a loosely-typed `dict` (not a pydantic
+    model) since it's been round-tripped through JSON from disk; every
+    field access uses `.get(..., default)` so a missing/older-schema field
+    degrades to a placeholder instead of raising.
+    """
+
     decision = event.get("decision", "?")
     decision_color = _DECISION_COLOR.get(decision, "white")
 
@@ -329,6 +438,9 @@ def explain(
     decision with its reasons. Reads data the engine already recorded; does
     not re-evaluate or change the decision."""
 
+    # `cfg.audit.path` tells us where the `jsonl` audit sink writes events
+    # (same config the engine itself uses), so `explain` looks in exactly
+    # the file the run-in-question would have written to.
     try:
         cfg = load(config)
     except ConfigError as exc:
@@ -340,6 +452,10 @@ def explain(
         console.print(f"[red]Audit log not found: {audit_path}[/red]")
         raise typer.Exit(code=1)
 
+    # The audit log is JSON Lines: one JSON object per line, append-only.
+    # `trace_id` is unique per `Decision`, but in principle multiple lines
+    # could share one (e.g. a future multi-event-per-decision audit
+    # format), so collect *all* matches rather than assuming exactly one.
     matches = []
     for line in audit_path.read_text().splitlines():
         line = line.strip()
@@ -364,6 +480,10 @@ def doctor(
     """Check config validity, audit-path writability, Python version, and
     which optional extras are installed."""
 
+    # `doctor` is a pre-flight diagnostic: it doesn't fix anything, just
+    # surfaces the most common reasons a deployment would fail (bad config,
+    # un-writable audit directory, missing optional dependency) before the
+    # user tries to actually run `serve` or wire the SDK into their agent.
     console.print(f"Python: {sys.version.split()[0]}")
 
     cfg = None
@@ -373,6 +493,12 @@ def doctor(
     except ConfigError as exc:
         console.print(f"[red]Config: {exc}[/red]")
 
+    # Only probe the audit path if the config loaded successfully --
+    # otherwise there's no `cfg.audit.path` to check. The probe writes and
+    # immediately deletes a throwaway file rather than checking
+    # `os.access()`, since that's a more reliable test of *actual*
+    # writability (covers read-only filesystems, permission edge cases,
+    # etc.) than permission-bit inspection alone.
     if cfg is not None:
         audit_dir = Path(cfg.audit.path).parent
         try:
@@ -384,6 +510,13 @@ def doctor(
         except OSError as exc:
             console.print(f"[red]Audit path not writable ({audit_dir}): {exc}[/red]")
 
+    # Report which optional extras (`[server]`, `[otel]`, `[metrics]`,
+    # `[redis]`) are installed by probing for their underlying third-party
+    # package via `importlib.util.find_spec` -- this mirrors exactly the
+    # check each optional module (`observability/metrics.py`,
+    # `observability/tracing.py`, etc.) does internally via its own
+    # try/except ImportError, surfaced here for human inspection instead of
+    # runtime branching.
     for extra_name, module_name in (
         ("server", "fastapi"),
         ("otel", "opentelemetry"),
@@ -404,6 +537,11 @@ def serve(
 ) -> None:
     """Run the agentvanguard sidecar/API service (requires the `server` extra)."""
 
+    # `uvicorn`/`server.app` are imported lazily (inside the function, not
+    # at module top-level) so the rest of the CLI (`init`, `scan`,
+    # `validate-config`, etc.) stays usable without the `[server]` extra
+    # installed -- only `serve` itself requires it, and only at the moment
+    # it's actually invoked.
     try:
         import uvicorn
 
@@ -421,6 +559,11 @@ def serve(
         console.print(f"[red]Invalid config:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
+    # Install the structured JSON logging handler (see
+    # `observability/logging.py`) before starting uvicorn, using the log
+    # level from `firewall.log_level` in the loaded config. `log_config=None`
+    # disables uvicorn's own default logging setup so it doesn't fight with
+    # (or override) the handler `configure_logging` just installed.
     configure_logging(cfg.firewall.log_level)
     uvicorn.run(create_app(cfg), host=host, port=port, log_config=None)
 
@@ -429,4 +572,7 @@ def serve(
 def version() -> None:
     """Print the agentvanguard version."""
 
+    # `__version__` is the single source of truth for the package version
+    # (agentvanguard/version.py); printing it here gives users/scripts a
+    # simple way to check it without importing the package in Python.
     console.print(__version__)

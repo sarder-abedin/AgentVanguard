@@ -14,10 +14,28 @@ from agentvanguard.core.models import Decision, PolicyInput
 
 
 class CLIApprovalProvider:
+    """Interactive, terminal-based `ApprovalProvider` for local SDK usage —
+    see module docstring above for the unattended/server-deployment caveat."""
+
     def __init__(self, console: Console | None = None) -> None:
+        # Allow a `Console` to be injected (e.g. for tests that need to
+        # capture output); default to a fresh `rich` console otherwise.
         self._console = console or Console()
 
     def request_approval(self, decision: Decision, context: PolicyInput) -> bool:
+        """Print the pending decision to the terminal and block on a y/N
+        prompt; return True only if the user explicitly answers "y"/"yes".
+
+        Prints, in order: a banner; the tool name and arguments (only when
+        `context.tool` is set, i.e. this confirmation was triggered by a
+        `tool_call`); the numeric `risk_score`; and every reason string
+        attached to the decision, so the human has enough context to make
+        an informed call without needing to inspect logs. Any other input
+        (including pressing enter / leaving it blank) is treated as "no"
+        — this keeps the prompt fail-closed by default, matching
+        `AutoDenyApprovalProvider`'s behavior when no input is given.
+        """
+
         self._console.print("[bold yellow]agentvanguard: confirmation required[/bold yellow]")
         if context.tool:
             self._console.print(f"  tool: {context.tool}")
