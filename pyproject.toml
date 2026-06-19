@@ -24,6 +24,7 @@ dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-pyyaml", "types-jsonschema
 otel = ["opentelemetry-api", "opentelemetry-sdk"]
 metrics = ["prometheus-client"]
 redis = ["redis"]
+demo = ["langgraph>=0.2", "langchain-core>=0.3", "langchain-ollama>=0.2", "streamlit>=1.38"]
 
 [project.scripts]
 agentvanguard = "agentvanguard.cli.main:app"
