@@ -16,6 +16,10 @@ discoverability:
 
 from __future__ import annotations
 
+# Plain re-export -- no FastAPI-specific subclassing or wrapping happens
+# here; the imported class is pure ASGI and is FastAPI-compatible as-is.
 from agentvanguard.integrations.asgi import AgentVanguardMiddleware
 
+# Defines the public surface of this module: only `AgentVanguardMiddleware`
+# is meant to be imported from `agentvanguard.integrations.fastapi`.
 __all__ = ["AgentVanguardMiddleware"]

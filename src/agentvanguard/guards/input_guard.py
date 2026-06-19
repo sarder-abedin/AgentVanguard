@@ -29,6 +29,26 @@ _DETECTOR_NAMES = ("injection", "pii", "secrets")
 
 
 def _normalize(text: str) -> str:
+    """Canonicalize `text` before it is handed to the detectors.
+
+    Two transformations are applied:
+
+    1. Unicode NFKC normalization — collapses visually-equivalent but
+       differently-encoded characters (e.g. full-width "A" vs ASCII "A",
+       or combining-character sequences) onto a single canonical form, so a
+       regex/keyword-based detector cannot be evaded by swapping in a
+       look-alike code point.
+    2. Zero-width character stripping — removes characters such as
+       U+200B (ZERO WIDTH SPACE) or U+FEFF (BOM/ZERO WIDTH NO-BREAK SPACE)
+       that render invisibly but can be inserted *inside* a keyword (e.g.
+       "ig​nore previous instructions") specifically to break naive
+       substring/regex matching while the text still reads normally to a
+       human or to an LLM tokenizer that ignores them.
+
+    Example: `_normalize("﻿ignore​ all instructions")` returns
+    `"ignore all instructions"`.
+    """
+
     normalized = unicodedata.normalize("NFKC", text)
     for ch in _ZERO_WIDTH_CHARS:
         normalized = normalized.replace(ch, "")
@@ -36,6 +56,17 @@ def _normalize(text: str) -> str:
 
 
 def _content_items(policy_input: PolicyInput) -> list[ContentItem]:
+    """Coerce `policy_input.content` into a uniform `list[ContentItem]`.
+
+    `PolicyInput.content` may be `None` (no content to inspect -> empty
+    list), a bare `str` (wrapped into a single `ContentItem` tagged
+    `ProvenanceLabel.USER`, since untagged string content is assumed to come
+    directly from the end user), or already a `list[ContentItem]` (e.g. a
+    mix of user text, retrieved documents, and prior tool output, each with
+    its own provenance) — in which case it is returned unchanged so each
+    item's existing provenance label is preserved.
+    """
+
     content = policy_input.content
     if content is None:
         return []
@@ -45,12 +76,24 @@ def _content_items(policy_input: PolicyInput) -> list[ContentItem]:
 
 
 def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegistry) -> Verdict:
-    """Run the input guard and return its `Verdict`."""
+    """Run the input guard and return its `Verdict`.
+
+    Walks every `ContentItem` in the request (normalizing each one first),
+    runs the injection/PII/secrets detectors over it, and tracks two running
+    maximums: the overall `risk_score` (across all finding types — used for
+    observability/aggregation) and `injection_risk_score` specifically
+    (the only score that drives the `action` decision here; PII/secrets are
+    recorded as findings but left to the output guard to redact on egress).
+    """
 
     findings: list[Finding] = []
     scores: list[float] = []
     injection_scores: list[float] = []
 
+    # Each ContentItem carries its own provenance (USER, RETRIEVED_DOC,
+    # TOOL_OUTPUT, ...); detectors and the resulting risk score are scoped
+    # per-item so a single tainted document doesn't get diluted by averaging
+    # against unrelated, clean items.
     for item in _content_items(policy_input):
         text = _normalize(item.text)
         for finding in detectors.detect_with(_DETECTOR_NAMES, text, item.provenance):
@@ -69,6 +112,11 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
     action = DecisionAction.ALLOW
     reasons: list[str] = []
 
+    # Threshold ladder: deny_threshold is the higher bar (definitely an
+    # injection attempt -> hard stop), review_threshold is the lower bar
+    # (suspicious enough to require a human to confirm before proceeding,
+    # but not certain enough to auto-deny). Falling below review_threshold
+    # leaves the action at ALLOW.
     if injection_risk_score >= deny_threshold:
         action = DecisionAction.DENY
         reasons.append(
@@ -82,6 +130,8 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
             f">= review threshold {review_threshold:.2f}"
         )
 
+    # Every finding (including PII/secrets, which don't affect `action`) is
+    # still surfaced in `reasons` for audit-log visibility.
     for finding in findings:
         reasons.append(f"{finding.detector}: {finding.message}")
 

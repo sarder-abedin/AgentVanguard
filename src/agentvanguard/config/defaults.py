@@ -4,12 +4,27 @@
 `config/loader.py` when no config file is present — its job is to make sure
 the engine always starts in a valid, fail-closed state. `DEFAULT_CONFIG_YAML`
 is the annotated example written to disk by `agentvanguard init`.
+
+These two are deliberately *not* required to be kept byte-for-byte
+equivalent: `get_default_config()` returns `Config()`, i.e. whatever the
+pydantic field defaults in `config/schema.py` happen to be, while
+`DEFAULT_CONFIG_YAML` is a hand-maintained, heavily-commented YAML template
+meant to teach a first-time user the shape of the file (including a
+non-empty example `tools:`/`workflows:` section, which `Config()` does not
+have by default). If you change a default in `schema.py`, consider whether
+`DEFAULT_CONFIG_YAML` below should be updated to match, but the two are not
+mechanically linked.
 """
 
 from __future__ import annotations
 
 from agentvanguard.config.schema import Config
 
+# The annotated YAML template written verbatim to disk by `agentvanguard
+# init` (see cli/main.py). Every section mirrors a model in `schema.py`;
+# the inline `#` comments here are aimed at a human reading/editing the
+# generated file, not at the values themselves (which mostly just restate
+# `schema.py`'s field defaults).
 DEFAULT_CONFIG_YAML = """\
 # agentvanguard configuration
 # https://github.com/ (see docs/architecture.md for the full reference)
@@ -95,4 +110,11 @@ rules: []
 def get_default_config() -> Config:
     """Return the built-in, dependency-free fallback configuration."""
 
+    # `Config()` with no arguments relies entirely on the `Field(default=...)`
+    # / `Field(default_factory=...)` values declared on every section in
+    # `schema.py` -- e.g. `fail_closed=True`, empty `tools`/`workflows`
+    # dicts, `approval_provider="auto_deny"`. Because every field has a
+    # default, this is guaranteed to construct successfully and to be a
+    # valid, fail-closed `Config` (no tools registered means every tool
+    # call is denied as unknown) even when nothing else is configured.
     return Config()
