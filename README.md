@@ -144,6 +144,12 @@ See [`examples/`](examples/) for complete, runnable scripts (`sdk_quickstart.py`
 [docs/architecture.md §7](docs/architecture.md#7-applying-agentvanguard-to-any-workflow)
 for all integration modes (SDK, tool broker, ASGI middleware, sidecar).
 
+For a live, end-to-end demo, see
+[`examples/langgraph_gui_demo/`](examples/langgraph_gui_demo/) — a LangGraph
+customer-support agent backed by a local Ollama model, with a Streamlit GUI
+that shows exactly what AgentVanguard decided (ingress, tool call, output,
+session limits) for every turn. Install with `pip install -e ".[demo]"`.
+
 ### Sidecar / API service
 
 Install the `server` extra and run the HTTP service — useful for polyglot
