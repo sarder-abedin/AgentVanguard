@@ -34,3 +34,7 @@ ruff
 mypy
 types-pyyaml
 types-jsonschema
+
+# --- notebooks extra: run examples/notebooks/*.ipynb (`jupyter lab`/`jupyter notebook`) ---
+jupyter>=1.0
+notebook>=7.0

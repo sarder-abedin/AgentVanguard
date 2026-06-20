@@ -25,6 +25,7 @@ otel = ["opentelemetry-api", "opentelemetry-sdk"]
 metrics = ["prometheus-client"]
 redis = ["redis"]
 demo = ["langgraph>=0.2", "langchain-core>=0.3", "langchain-ollama>=0.2", "streamlit>=1.38"]
+notebooks = ["jupyter>=1.0", "notebook>=7.0"]
 
 [project.scripts]
 agentvanguard = "agentvanguard.cli.main:app"

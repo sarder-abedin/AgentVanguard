@@ -65,11 +65,32 @@ tools:
     requires_approval: true
     allowed_callers: [support_agent]
 
+  # check_status_page/read_file are used only by
+  # examples/notebooks/02_tool_broker.ipynb, to demonstrate the tool-call
+  # guard's SSRF and path-traversal checks.
+  check_status_page:
+    description: Fetch a vendor's public status page by URL to check for outages.
+    action_type: read
+    side_effect: external_communication
+    risk_tier: medium
+    reversible: true
+    requires_approval: false
+    allowed_callers: [support_agent]
+
+  read_file:
+    description: Read a file from the local workspace.
+    action_type: read
+    side_effect: internal_read
+    risk_tier: low
+    reversible: true
+    requires_approval: false
+    allowed_callers: [support_agent]
+
 workflows:
   customer_support:
     risk_tier: medium
     allowed_agents: [support_agent]
-    allowed_tools: [lookup_order, send_email]
+    allowed_tools: [lookup_order, send_email, check_status_page, read_file]
     egress_allowlist: [company.com]
 
 rules: []
