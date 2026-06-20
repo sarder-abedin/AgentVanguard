@@ -28,11 +28,26 @@ class AgentVanguardClient:
     `httpx.Client` is closed.
     """
 
-    def __init__(self, base_url: str, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, timeout: float = 10.0, api_key: str | None = None, verify: bool = True) -> None:
         # All requests are relative to `base_url` (e.g. the host:port the
         # sidecar's `agentvanguard serve` is listening on); `timeout` bounds
-        # every HTTP call made through this client.
-        self._client = httpx.Client(base_url=base_url, timeout=timeout)
+        # every HTTP call made through this client. `api_key`, if given, is
+        # sent as `X-API-Key` on every request -- required whenever the
+        # server has a non-empty `config.server.api_keys` (see
+        # `server/deps.py:require_api_key`); harmless to omit against a
+        # server with no `api_keys` configured.
+        #
+        # `verify` is passed straight through to `httpx.Client` and defaults
+        # to `True` (the `httpx` default too) -- made an explicit, named
+        # parameter here rather than left implicit, so that disabling TLS
+        # verification against an `https://` `base_url` is always a
+        # deliberate, visible choice at the call site (e.g. for a self-signed
+        # cert in a local/test deployment) and never an accidental side
+        # effect of how this client happens to construct `httpx.Client`.
+        # Sending `api_key` over a connection with `verify=False` defeats the
+        # confidentiality TLS would otherwise provide it.
+        headers = {"X-API-Key": api_key} if api_key else None
+        self._client = httpx.Client(base_url=base_url, timeout=timeout, headers=headers, verify=verify)
 
     def close(self) -> None:
         """Close the underlying `httpx.Client` and release its connection

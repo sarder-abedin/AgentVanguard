@@ -3,8 +3,21 @@ fans it out to every configured `AuditSink`.
 
 When `audit.redact_secrets` is enabled (the default), the `PolicyInput`
 payload snapshot is run through the same `secrets`/`pii` detectors as the
-output guard before being written — the audit log never contains anything
-the output guard would have redacted.
+output guard before being written.
+
+Deliberate asymmetry with `output_guard`/`config.dlp.*`: `audit.redact_secrets`
+is a single on/off switch that, when enabled, redacts *every* secret/PII
+finding regardless of the granular `dlp.redact_emails`/`redact_credit_cards`
+toggles the output guard honors for the live response (see
+`guards/output_guard._is_redactable`). This is intentional, not a bug to be
+reconciled: those toggles control what an *agent's own output* is allowed to
+say (e.g. a support bot may be allowed to echo a customer's email address
+back to them), which is an unrelated decision from what a persistent,
+potentially long-lived audit log -- which may be shipped to a third-party
+collector via `HttpBatchAuditSink` -- should retain. The audit log defaults
+to the strictly more conservative behavior independent of those toggles so
+that relaxing what an agent may say in its output can never, as a side
+effect, also relax what gets written permanently to disk/shipped externally.
 """
 
 from __future__ import annotations

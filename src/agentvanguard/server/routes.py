@@ -5,6 +5,12 @@ builds one from an action-specific convenience request model
 (`server/schemas.py`) and calls `AgentVanguard.authorize()` — the same
 `Engine.authorize()` used by the SDK and tool-broker. No policy logic lives
 here.
+
+Every route below except `/healthz`/`/readyz` carries `dependencies=[Depends
+(require_api_key)]`, gated by `config.server.api_keys` (see
+`server/deps.py`) -- `/healthz`/`/readyz` are deliberately left
+unauthenticated since orchestrator liveness/readiness probes typically
+cannot attach a secret header.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from agentvanguard.core.models import ContentItem, Decision, PolicyInput
 from agentvanguard.firewall import AgentVanguard
 from agentvanguard.observability import metrics
 from agentvanguard.policy.risk import worst_action
-from agentvanguard.server.deps import get_firewall
+from agentvanguard.server.deps import get_firewall, require_api_key
 from agentvanguard.server.schemas import (
     CompileContextRequest,
     IngressRequest,
@@ -94,7 +100,7 @@ def readyz(firewall: AgentVanguard = Depends(get_firewall)) -> dict[str, str]:
     return {"status": "ready"}
 
 
-@router.post("/v1/authorize", response_model=Decision)
+@router.post("/v1/authorize", response_model=Decision, dependencies=[Depends(require_api_key)])
 def authorize(policy_input: PolicyInput, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """Generic endpoint: body is a full `PolicyInput`, returns a `Decision`.
 
@@ -119,7 +125,7 @@ def authorize(policy_input: PolicyInput, firewall: AgentVanguard = Depends(get_f
     return firewall.authorize(policy_input)
 
 
-@router.post("/v1/check-ingress", response_model=Decision)
+@router.post("/v1/check-ingress", response_model=Decision, dependencies=[Depends(require_api_key)])
 def check_ingress(req: IngressRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=ingress` convenience wrapper.
 
@@ -134,7 +140,7 @@ def check_ingress(req: IngressRequest, firewall: AgentVanguard = Depends(get_fir
     return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, **_data(req)))
 
 
-@router.post("/v1/check-model-request", response_model=Decision)
+@router.post("/v1/check-model-request", response_model=Decision, dependencies=[Depends(require_api_key)])
 def check_model_request(
     req: ModelRequestRequest, firewall: AgentVanguard = Depends(get_firewall)
 ) -> Decision:
@@ -150,7 +156,7 @@ def check_model_request(
     return firewall.authorize(PolicyInput(action=ActionKind.MODEL_REQUEST, **_data(req)))
 
 
-@router.post("/v1/authorize-tool-call", response_model=Decision)
+@router.post("/v1/authorize-tool-call", response_model=Decision, dependencies=[Depends(require_api_key)])
 def authorize_tool_call(
     req: ToolCallRequest, firewall: AgentVanguard = Depends(get_firewall)
 ) -> Decision:
@@ -166,7 +172,7 @@ def authorize_tool_call(
     return firewall.authorize(PolicyInput(action=ActionKind.TOOL_CALL, **_data(req)))
 
 
-@router.post("/v1/check-output", response_model=Decision)
+@router.post("/v1/check-output", response_model=Decision, dependencies=[Depends(require_api_key)])
 def check_output(req: OutputRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=output` convenience wrapper.
 
@@ -185,7 +191,7 @@ def check_output(req: OutputRequest, firewall: AgentVanguard = Depends(get_firew
     )
 
 
-@router.post("/v1/compile-context", response_model=Decision)
+@router.post("/v1/compile-context", response_model=Decision, dependencies=[Depends(require_api_key)])
 def compile_context(req: CompileContextRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=ingress` wrapper over a list of RAG-retrieved `ContentItem`s,
     each carrying its own `provenance`.
@@ -200,7 +206,7 @@ def compile_context(req: CompileContextRequest, firewall: AgentVanguard = Depend
     return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=req.items, **data))
 
 
-@router.post("/v1/check-memory-read", response_model=Decision)
+@router.post("/v1/check-memory-read", response_model=Decision, dependencies=[Depends(require_api_key)])
 def check_memory_read(req: MemoryReadRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=ingress` wrapper that always tags `content` as
     `retrieved_doc` provenance, regardless of the original source -- this is
@@ -220,7 +226,7 @@ def check_memory_read(req: MemoryReadRequest, firewall: AgentVanguard = Depends(
     return firewall.authorize(PolicyInput(action=ActionKind.INGRESS, content=content, **data))
 
 
-@router.post("/v1/check-memory-write", response_model=Decision)
+@router.post("/v1/check-memory-write", response_model=Decision, dependencies=[Depends(require_api_key)])
 def check_memory_write(req: MemoryWriteRequest, firewall: AgentVanguard = Depends(get_firewall)) -> Decision:
     """`action=output` wrapper -- runs the output guard (DLP) over content
     about to be persisted to a memory/vector store.
@@ -239,7 +245,7 @@ def check_memory_write(req: MemoryWriteRequest, firewall: AgentVanguard = Depend
     )
 
 
-@router.post("/v1/validate-plan", response_model=ValidatePlanResponse)
+@router.post("/v1/validate-plan", response_model=ValidatePlanResponse, dependencies=[Depends(require_api_key)])
 def validate_plan(req: ValidatePlanRequest, firewall: AgentVanguard = Depends(get_firewall)) -> ValidatePlanResponse:
     """Validate a multi-step tool-call plan *before* executing any of it.
 
@@ -263,7 +269,7 @@ def validate_plan(req: ValidatePlanRequest, firewall: AgentVanguard = Depends(ge
     return ValidatePlanResponse(overall=worst_action(step.decision for step in steps), steps=steps)
 
 
-@router.get("/metrics")
+@router.get("/metrics", dependencies=[Depends(require_api_key)])
 def metrics_endpoint() -> Response:
     """Prometheus exposition format, or an empty body if the `metrics` extra
     isn't installed.

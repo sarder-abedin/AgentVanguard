@@ -20,6 +20,10 @@ no rewriting beyond DLP redaction.
 The rewritten text (if any redaction or context-aware sanitization applied)
 is returned via `Verdict.redactions` + the engine sets
 `Decision.redacted_content` so callers get the sanitized text back directly.
+
+Output longer than `runtime_limits.max_content_length` is rejected outright
+(`DENY`, `FindingType.CONTENT_TOO_LARGE`) *before* any detector runs over it
+-- there is no safe redaction of text that was never scanned.
 """
 
 from __future__ import annotations
@@ -33,6 +37,8 @@ from agentvanguard.core.models import Finding, PolicyInput, Redaction, Verdict
 from agentvanguard.detectors.redact import apply_redactions
 from agentvanguard.detectors.registry import DetectorRegistry
 from agentvanguard.policy.risk import finding_score, max_score
+
+_MAX_LENGTH_DETECTOR = "output_guard:max_content_length"
 
 _DETECTOR_NAMES = ("pii", "secrets", "exfil")
 
@@ -98,6 +104,26 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
 
     text = _extract_text(policy_input)
     destination = (policy_input.arguments or {}).get("destination", "plain")
+
+    # Reject oversized output before it ever reaches a regex-based detector --
+    # unbounded text is itself a resource-exhaustion risk independent of what
+    # the detectors would find in it. This is a hard stop: there is no safe
+    # redaction of text that was never scanned.
+    max_length = config.runtime_limits.max_content_length
+    if len(text) > max_length:
+        too_large = Finding(
+            type=FindingType.CONTENT_TOO_LARGE,
+            detector=_MAX_LENGTH_DETECTOR,
+            severity=RiskTier.HIGH,
+            message=f"output content ({len(text)} chars) exceeds max_content_length ({max_length})",
+        )
+        return Verdict(
+            stage=GuardStage.OUTPUT,
+            action=DecisionAction.DENY,
+            risk_score=finding_score(too_large),
+            findings=[too_large],
+            reasons=[f"{too_large.detector}: {too_large.message}"],
+        )
 
     findings = detectors.detect_with(_DETECTOR_NAMES, text, ProvenanceLabel.ASSISTANT)
     risk_score = max_score(finding_score(f) for f in findings)

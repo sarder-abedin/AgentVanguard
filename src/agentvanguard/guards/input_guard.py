@@ -12,6 +12,11 @@ implementation plan):
 PII/secrets findings are recorded (and contribute to `risk_score`) but do not
 by themselves change the action — the output guard is responsible for DLP
 redaction on the way *out*.
+
+Any single content item longer than `runtime_limits.max_content_length` is
+rejected outright (`DENY`, `FindingType.CONTENT_TOO_LARGE`) *before* it is
+handed to any detector -- unbounded attacker-controlled text is itself a
+resource-exhaustion risk independent of what the detectors would find in it.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from __future__ import annotations
 import unicodedata
 
 from agentvanguard.config.schema import Config
-from agentvanguard.core.enums import DecisionAction, FindingType, GuardStage, ProvenanceLabel
+from agentvanguard.core.enums import DecisionAction, FindingType, GuardStage, ProvenanceLabel, RiskTier
 from agentvanguard.core.models import ContentItem, Finding, PolicyInput, Verdict
 from agentvanguard.detectors.registry import DetectorRegistry
 from agentvanguard.policy.risk import finding_score, max_score
@@ -89,6 +94,8 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
     findings: list[Finding] = []
     scores: list[float] = []
     injection_scores: list[float] = []
+    oversized = False
+    max_length = config.runtime_limits.max_content_length
 
     # Each ContentItem carries its own provenance (USER, RETRIEVED_DOC,
     # TOOL_OUTPUT, ...); detectors and the resulting risk score are scoped
@@ -96,6 +103,25 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
     # against unrelated, clean items.
     for item in _content_items(policy_input):
         text = _normalize(item.text)
+        # Reject oversized content before it ever reaches a regex-based
+        # detector -- unbounded attacker-controlled text (e.g. a malicious
+        # retrieved document or tool output) is itself a resource-exhaustion
+        # risk (ReDoS/CPU), independent of whatever the detectors would find
+        # in it, so the cap is enforced first and the text is not scanned.
+        if len(text) > max_length:
+            oversized = True
+            too_large = Finding(
+                type=FindingType.CONTENT_TOO_LARGE,
+                detector="input_guard:max_content_length",
+                severity=RiskTier.HIGH,
+                message=(
+                    f"content item ({len(text)} chars, provenance={item.provenance.value}) "
+                    f"exceeds max_content_length ({max_length})"
+                ),
+            )
+            findings.append(too_large)
+            scores.append(finding_score(too_large, item.provenance))
+            continue
         for finding in detectors.detect_with(_DETECTOR_NAMES, text, item.provenance):
             score = finding_score(finding, item.provenance)
             findings.append(finding)
@@ -109,7 +135,9 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
     deny_threshold = config.prompt_injection.deny_threshold
     review_threshold = config.prompt_injection.review_threshold
 
-    action = DecisionAction.ALLOW
+    # Oversized content is a hard stop, fail-closed: it was never scanned
+    # by the detectors above, so there is no risk-score-based path to ALLOW.
+    action = DecisionAction.DENY if oversized else DecisionAction.ALLOW
     reasons: list[str] = []
 
     # Threshold ladder: deny_threshold is the higher bar (definitely an
@@ -123,7 +151,7 @@ def evaluate(policy_input: PolicyInput, config: Config, detectors: DetectorRegis
             f"prompt injection risk score {injection_risk_score:.2f} "
             f">= deny threshold {deny_threshold:.2f}"
         )
-    elif injection_risk_score >= review_threshold:
+    elif injection_risk_score >= review_threshold and not oversized:
         action = DecisionAction.REQUIRE_USER_CONFIRMATION
         reasons.append(
             f"prompt injection risk score {injection_risk_score:.2f} "

@@ -65,6 +65,31 @@ def test_check_ingress_flags_prompt_injection(client: TestClient) -> None:
     assert body["reasons"]
 
 
+def test_unhandled_exception_returns_generic_500(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unhandled exception inside a route must never leak its message,
+    type, or traceback to the HTTP caller -- see `server/app.py`'s
+    `_unhandled_exception_handler`."""
+
+    def _boom(self: object, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("/secret/internal/path leaked-detail")
+
+    monkeypatch.setattr("agentvanguard.firewall.AgentVanguard.authorize", _boom)
+
+    config = Config(audit={"path": str(tmp_path / "logs" / "audit.jsonl")})
+    # `TestClient` re-raises server-side exceptions by default (useful for
+    # debugging real test failures) rather than letting the app's own
+    # exception handler turn them into a response -- `raise_server_exceptions
+    # =False` here is what actually exercises `_unhandled_exception_handler`.
+    no_raise_client = TestClient(create_app(config), raise_server_exceptions=False)
+
+    response = no_raise_client.post("/v1/check-ingress", json={"content": "hello there"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}
+    assert "secret" not in response.text
+    assert "RuntimeError" not in response.text
+
+
 def test_check_model_request_allows_benign_text(client: TestClient) -> None:
     response = client.post("/v1/check-model-request", json={"content": "what's the weather today?"})
 
