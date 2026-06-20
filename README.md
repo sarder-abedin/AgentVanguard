@@ -70,6 +70,7 @@ plain-language walkthrough of what it does and how to use it.
    pip install -e ".[server,otel]"     # + OpenTelemetry tracing
    pip install -e ".[redis]"           # shared session store across replicas
    pip install -e ".[dev]"             # pytest, ruff, mypy for development
+   pip install -e ".[notebooks]"       # Jupyter tutorial notebooks (examples/notebooks/)
    ```
 
    Extras can be combined, e.g. `pip install -e ".[server,metrics,otel,redis,dev]"`.
@@ -143,6 +144,11 @@ See [`examples/`](examples/) for complete, runnable scripts (`sdk_quickstart.py`
 `tool_broker_quickstart.py`, `mock_agent_loop.py`) and
 [docs/architecture.md §7](docs/architecture.md#7-applying-agentvanguard-to-any-workflow)
 for all integration modes (SDK, tool broker, ASGI middleware, sidecar).
+
+Prefer notebooks? [`examples/notebooks/`](examples/notebooks/) has a
+four-part Jupyter tutorial series (SDK basics, the tool broker, session
+limits + the audit log, then a full mock agent loop) — install with
+`pip install -e ".[notebooks]"`.
 
 For a live, end-to-end demo, see
 [`examples/langgraph_gui_demo/`](examples/langgraph_gui_demo/) — a LangGraph

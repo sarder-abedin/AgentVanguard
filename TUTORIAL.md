@@ -707,5 +707,8 @@ agentvanguard explain <trace_id>
 - [`docs/architecture.md`](docs/architecture.md) — full design: threat model,
   components, decision rules, and how to onboard a new workflow.
 - [`examples/`](examples/) — runnable scripts for every pattern above.
+- [`examples/notebooks/`](examples/notebooks/) — the same patterns as an
+  interactive, four-part Jupyter tutorial series, if you'd rather run things
+  cell-by-cell.
 - [`CLAUDE.md`](CLAUDE.md) — developer setup, project layout, and conventions
   (if you're contributing to AgentVanguard itself).
