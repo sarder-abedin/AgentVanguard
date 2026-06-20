@@ -11,6 +11,16 @@ appears in `USER`/`SYSTEM`/`ASSISTANT` content. This implements the
 instruction-hierarchy principle from `docs/architecture.md` §4.1: a tool
 result or retrieved document telling the agent to "ignore previous
 instructions" is far more suspicious than a user typing the same words.
+
+Every pattern below uses only *bounded* quantifiers (`.{0,N}` for small,
+fixed `N`), never an unbounded `.*`/`.+` between two other quantified groups
+-- chaining unbounded quantifiers is what causes catastrophic (exponential)
+regex backtracking. The bounded gaps still leave a polynomial (not
+exponential) worst case proportional to input length, which is why
+`guards/input_guard.py`/`guards/output_guard.py`/`guards/tool_guard.py` all
+enforce `runtime_limits.max_content_length` *before* handing text to this
+detector at all -- that cap is the actual bound on worst-case cost here, not
+just a length courtesy.
 """
 
 from __future__ import annotations
@@ -134,12 +144,15 @@ _PATTERNS: list[InjectionPattern] = [
         # Three groups: a roleplay-framing verb, a negation phrase
         # ("without"/"with no"/"no longer bound"), and the thing being
         # negated (restrictions/filters/guidelines/rules/limits) — wider
-        # gaps here (`.{0,60}`, `.{0,30}`) than other patterns because
+        # gaps here (`.{0,40}`, `.{0,20}`) than other patterns because
         # roleplay setup text between the framing and the negation tends
         # to be longer ("act as DAN, a model that has been freed from...").
+        # Kept well short of the previous (`.{0,60}`, `.{0,30}`) bounds,
+        # which widened the worst-case backtracking cost on long
+        # non-matching input for comparatively little extra recall.
         re.compile(
-            r"\b(act as|pretend (you are|to be))\b.{0,60}"
-            r"\b(without|with no|no longer (bound|restricted))\b.{0,30}"
+            r"\b(act as|pretend (you are|to be))\b.{0,40}"
+            r"\b(without|with no|no longer (bound|restricted))\b.{0,20}"
             r"\b(restrictions?|filters?|guidelines?|rules?|limits?)\b",
             re.IGNORECASE,
         ),

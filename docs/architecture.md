@@ -121,6 +121,14 @@ policy file rather than its own enforcement code.
   instruction embedded in untrusted data (e.g., a webpage the agent just read)? If so,
   apply stricter rules or require approval.
 
+**Known limitation**: the SSRF check resolves DNS at authorization time, not at the
+moment the tool itself opens the connection, so a DNS-rebinding attacker can serve a
+public IP for the check and rebind to an internal address before the tool's own
+(separate) resolution happens (see `guards/tool_guard.py:_check_ssrf`'s docstring).
+Treat it as a strong best-effort filter layered under network-level egress controls
+(e.g. a NAT/firewall denying RFC 1918/link-local destinations for the agent's runtime),
+not a standalone guarantee.
+
 **Why**
 This is where "thinking" becomes "doing." It's the most consequential checkpoint
 because most real-world damage (data exfiltration, destructive operations, SSRF

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agentvanguard.audit.events import AuditEvent
@@ -39,5 +40,16 @@ class JsonlFileSink:
         # simplicity and crash-safety: there is no handle to leak or flush
         # on shutdown, and a process crash never loses a write that already
         # returned from this call.
-        with open(self.path, "a", encoding="utf-8") as f:
+        #
+        # The audit log can contain redacted-but-still-sensitive context
+        # (session IDs, tool arguments, finding messages), so it must not be
+        # left world/group-readable. `os.open` with an explicit mode only
+        # applies that mode at file *creation* (still subject to umask), and
+        # has no effect on a pre-existing file from before this fix or from
+        # a looser-umask process, so `os.chmod` is also called on every
+        # write to actively enforce 0600 regardless of how the file got
+        # there.
+        fd = os.open(self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        os.chmod(self.path, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(event.model_dump_json() + "\n")

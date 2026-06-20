@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from agentvanguard.config.schema import Config
 from agentvanguard.firewall import AgentVanguard
+from agentvanguard.server.limits import BodySizeLimitMiddleware
 from agentvanguard.server.routes import router
 from agentvanguard.version import __version__
 
@@ -41,6 +42,10 @@ def create_app(config: Config) -> FastAPI:
     # dependency -- see the architecture invariant in CLAUDE.md.
     app.state.firewall = AgentVanguard(config)
     app.include_router(router)
+    # Bounds the memory/CPU cost of a single oversized request before it
+    # ever reaches routing/pydantic validation -- see
+    # `server/limits.py:BodySizeLimitMiddleware`.
+    app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=config.server.max_request_body_bytes)
 
     # `config.server.api_keys` empty means `require_api_key` (see
     # `server/deps.py`) is a no-op for every route -- every caller that can

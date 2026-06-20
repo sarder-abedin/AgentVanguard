@@ -20,6 +20,7 @@ schedule and rebuild the `AgentVanguard`).
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 from typing import Literal, Protocol, runtime_checkable
 
@@ -30,6 +31,8 @@ from agentvanguard.config.defaults import get_default_config
 from agentvanguard.config.loader import load
 from agentvanguard.config.schema import Config
 from agentvanguard.core.errors import ConfigError
+
+logger = logging.getLogger(__name__)
 
 # The two legal values for `HttpPolicyBundleSource.fail_mode`; see the
 # module docstring above for what each one does on a fetch failure.
@@ -122,6 +125,19 @@ class HttpPolicyBundleSource:
             config = self._fetch_and_validate()
         except (OSError, ConfigError) as exc:
             if self.fail_mode == "open":
+                # The degradation is intentional (that's what `fail_mode ==
+                # "open"` asks for), but running on stale-or-default policy
+                # because the policy server is unreachable/serving bad data
+                # is exactly the kind of thing an operator needs to know
+                # about -- so it's logged even though it isn't raised.
+                fallback = "cached" if self._cached is not None else "default"
+                logger.warning(
+                    "agentvanguard control_plane: failed to fetch policy bundle from %s "
+                    "(fail_mode=open, falling back to %s config): %s",
+                    self.url,
+                    fallback,
+                    exc,
+                )
                 return self._cached if self._cached is not None else get_default_config()
             raise ConfigError(f"failed to fetch policy bundle from {self.url}: {exc}") from exc
 
