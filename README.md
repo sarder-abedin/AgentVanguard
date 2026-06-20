@@ -187,6 +187,16 @@ request (`/healthz`/`/readyz` stay open for orchestrator probes). With no
 API is open to anyone who can reach it — deploy it behind an authenticating
 reverse proxy / mTLS boundary in that case. Pass the same key to
 `AgentVanguardClient(base_url, api_key="...")` to authenticate client calls.
+`AgentVanguardClient` verifies TLS certificates by default for `https://`
+URLs (`verify=True`, like `httpx`); only pass `verify=False` for a
+deliberately self-signed/local deployment.
+
+**CORS**: no CORS middleware is enabled by default — the sidecar is meant to
+be called server-to-server (by the agent process/orchestrator), not directly
+from a browser. If a deployment needs browser-originated requests, add
+`starlette.middleware.cors.CORSMiddleware` explicitly with an `allow_origins`
+allow-list scoped to that deployment's own frontend(s); never combine
+`allow_origins=["*"]` with credentials/an API key.
 
 ### ASGI middleware
 
