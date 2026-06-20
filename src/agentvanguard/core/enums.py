@@ -181,6 +181,11 @@ class FindingType(str, Enum):
     # `guards/tool_guard.py:_check_command_injection` — a string argument to
     # an `ActionType.EXECUTE` tool contains shell metacharacters.
     COMMAND_INJECTION = "command_injection"
+    # `guards/input_guard.py`/`guards/output_guard.py`/`guards/tool_guard.py`
+    # — a content item or argument value exceeds
+    # `runtime_limits.max_content_length`; rejected before any detector runs
+    # over it, since unbounded input is itself a resource-exhaustion risk.
+    CONTENT_TOO_LARGE = "content_too_large"
 
 
 class GuardStage(str, Enum):

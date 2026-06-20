@@ -64,3 +64,14 @@ decision = client.check_ingress("hello")
 Or via plain HTTP from any language: `POST /v1/authorize`, `/v1/check-ingress`,
 `/v1/check-model-request`, `/v1/authorize-tool-call`, `/v1/check-output`
 (see `src/agentvanguard/server/routes.py`).
+
+## Authentication
+
+The sidecar has no built-in auth unless `server.api_keys` is set in
+`agentvanguard.yaml`/`configmap.yaml` (every `/v1/*` and `/metrics` route then
+requires an `X-API-Key` or `Authorization: Bearer <token>` header;
+`/healthz`/`/readyz` stay open for the kubelet's probes). Without
+`api_keys` configured, anything inside the cluster that can reach the
+`Service` can call the API unauthenticated — either set `server.api_keys`
+and distribute the key via a `Secret`, or restrict access with a
+`NetworkPolicy`/service mesh mTLS policy in front of the `Deployment`.

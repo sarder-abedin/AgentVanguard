@@ -179,6 +179,15 @@ client = AgentVanguardClient("http://localhost:8080")
 decision = client.check_ingress("hello there")
 ```
 
+**Authentication**: by default the sidecar has no built-in auth — set
+`server.api_keys` in `agentvanguard.yaml` to require an `X-API-Key` (or
+`Authorization: Bearer <token>`) header on every `/v1/*` and `/metrics`
+request (`/healthz`/`/readyz` stay open for orchestrator probes). With no
+`api_keys` configured, `agentvanguard serve` logs a startup warning and the
+API is open to anyone who can reach it — deploy it behind an authenticating
+reverse proxy / mTLS boundary in that case. Pass the same key to
+`AgentVanguardClient(base_url, api_key="...")` to authenticate client calls.
+
 ### ASGI middleware
 
 Mediate an existing FastAPI/Starlette (or other ASGI) app's HTTP traffic

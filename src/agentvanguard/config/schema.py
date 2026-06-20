@@ -109,6 +109,13 @@ class RuntimeLimits(BaseModel):
     - `max_repeated_calls`: maximum number of times the *same* tool call
       (same tool name + same arguments, see `guards/session_guard.call_hash`)
       may repeat within one session -- guards against runaway retry loops.
+    - `max_content_length`: maximum length (in characters) of any single
+      piece of text passed to a detector -- ingress/output content items and
+      tool-call argument string values. Enforced by `guards/input_guard.py`,
+      `guards/output_guard.py`, and `guards/tool_guard.py` *before* running
+      any regex-based detector, since unbounded attacker-controlled text is
+      itself a resource-exhaustion (ReDoS/CPU) risk independent of what the
+      detectors find.
     """
 
     max_steps: int = 12
@@ -116,6 +123,7 @@ class RuntimeLimits(BaseModel):
     max_runtime_seconds: float = 60.0
     max_cost_usd: float = 5.00
     max_repeated_calls: int = 3
+    max_content_length: int = 50_000
 
 
 class PromptInjectionSection(BaseModel):
@@ -167,6 +175,32 @@ class ToolGuardSection(BaseModel):
 
     workspace_root: str = "."
     egress_allowlist: list[str] = Field(default_factory=list)
+
+
+class ServerSection(BaseModel):
+    """Top-level `server:` section: HTTP-sidecar-specific hardening knobs.
+    Only consulted by `agentvanguard serve`/`server/`; the SDK and tool-
+    broker integration paths never read this section.
+
+    - `api_keys`: bearer/API-key tokens accepted by the sidecar's auth
+      dependency (`server/deps.py:require_api_key`), checked against the
+      `Authorization: Bearer <token>` or `X-API-Key` request header using a
+      constant-time comparison. Empty (the default) disables authentication
+      entirely -- every request is accepted -- since the sidecar is commonly
+      deployed behind a reverse proxy, service mesh, or mTLS boundary that
+      already authenticates callers; `agentvanguard serve` logs a startup
+      warning when this list is empty so the gap is visible rather than
+      silent.
+    - `max_request_body_bytes`: maximum accepted HTTP request body size, in
+      bytes, enforced by `server/app.py`'s body-size-limit middleware before
+      the body is parsed/validated -- bounds memory/CPU spent on a single
+      request regardless of what `runtime_limits.max_content_length` later
+      catches inside the engine. `uvicorn` has no built-in flag for this, so
+      it is enforced at the ASGI-app level instead.
+    """
+
+    api_keys: list[str] = Field(default_factory=list)
+    max_request_body_bytes: int = 2_000_000
 
 
 class SessionStoreSection(BaseModel):
@@ -316,6 +350,7 @@ class Config(BaseModel):
         default_factory=lambda: dict(DEFAULT_PROVENANCE_MAPPING)
     )
     tool_guard: ToolGuardSection = Field(default_factory=ToolGuardSection)
+    server: ServerSection = Field(default_factory=ServerSection)
     session_store: SessionStoreSection = Field(default_factory=SessionStoreSection)
     tools: dict[str, ToolConfig] = Field(default_factory=dict)
     workflows: dict[str, WorkflowConfig] = Field(default_factory=dict)
